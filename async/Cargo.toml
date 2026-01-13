@@ -6,4 +6,3 @@ edition = "2024"
 [dependencies]
 uefi = { version = "0.36.1", features = ["logger", "alloc", "global_allocator", "panic_handler"] }
 uefi-async-macros = { path = "../macros" }
-crossbeam-utils = "0.8.21"

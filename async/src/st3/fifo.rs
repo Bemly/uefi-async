@@ -35,8 +35,6 @@
 //! let steal_count = th.join().unwrap();
 //! assert_eq!(pop_count + steal_count, 4);
 //! ```
-use alloc::boxed::Box;
-use alloc::sync::Arc;
 
 use core::alloc::Layout;
 use core::cell::UnsafeCell;
@@ -46,8 +44,11 @@ use core::panic::{RefUnwindSafe, UnwindSafe};
 use core::sync::atomic::{AtomicU32, AtomicU64};
 use core::sync::atomic::Ordering::{AcqRel, Acquire, Relaxed, Release};
 
-use crossbeam_utils::CachePadded;
-use crate::st3::{allocate_buffer, pack, unpack, StealError};
+use crate::st3::{pack, unpack, StealError};
+
+#[derive(Debug)]
+#[repr(align(128))]
+struct Align<T>(pub T);
 
 /// A double-ended FIFO work-stealing queue.
 ///
@@ -64,22 +65,28 @@ use crate::st3::{allocate_buffer, pack, unpack, StealError};
 ///   ABA.
 ///
 #[derive(Debug)]
-struct Queue<T> {
+#[repr(C, align(128))]
+pub struct Queue<T, const N: usize> {
     /// Positions of the head as seen by the worker (most significant bits) and
     /// as seen by a stealer (least significant bits).
-    heads: CachePadded<AtomicU64>,
+    /// 组 1: Worker/Stealer 共同竞争的头部区 (128B)
+    pub heads: Align<AtomicU64>,
 
-    /// Position of the tail.
-    tail: CachePadded<AtomicU32>,
-
+    /// 组 2: 数据区 (Buffer)
+    /// FIFO 模式下，Buffer 同样充当隔离带
     /// Queue items.
-    buffer: Box<[UnsafeCell<MaybeUninit<T>>]>,
+    pub buffer: [UnsafeCell<MaybeUninit<T>>; N],
 
-    /// Mask for the buffer index.
-    mask: u32,
+    /// 组 3: 尾部修改区 (128B)
+    /// 只有 Worker 频繁修改 tail
+    /// Position of the tail.
+    pub tail: Align<AtomicU32>,
 }
 
-impl<T> Queue<T> {
+impl<T, const N: usize> Queue<T, N> {
+    const CHECK_N: () = assert!(N.is_power_of_two(), "N must be a power of two");
+    const MASK: u32 = (N - 1) as u32;
+
     /// Read an item at the given position.
     ///
     /// The position is automatically mapped to a valid buffer index using a
@@ -92,10 +99,9 @@ impl<T> Queue<T> {
     ///
     /// The caller must guarantee that the item at this position cannot be
     /// written to or moved out concurrently.
-    #[inline]
+    #[inline(always)]
     unsafe fn read_at(&self, position: u32) -> T {
-        let index = (position & self.mask) as usize;
-        (*self.buffer).as_ref()[index].with(|slot| slot.read().assume_init())
+        self.buffer[(position & Self::MASK) as usize].get().read().assume_init()
     }
 
     /// Write an item at the given position.
@@ -112,10 +118,9 @@ impl<T> Queue<T> {
     ///
     /// The caller must guarantee that the item at this position cannot be read
     /// or written to concurrently.
-    #[inline]
+    #[inline(always)]
     unsafe fn write_at(&self, position: u32, item: T) {
-        let index = (position & self.mask) as usize;
-        (*self.buffer).as_ref()[index].with_mut(|slot| slot.write(MaybeUninit::new(item)));
+        self.buffer[(position & Self::MASK) as usize].get().write(MaybeUninit::new(item));
     }
 
     /// Attempt to book `N` items for stealing where `N` is specified by a
@@ -137,16 +142,11 @@ impl<T> Queue<T> {
     /// stealing operation by modifying the worker head without ever updating
     /// the stealer head, its misuse can result in permanently blocking
     /// subsequent stealing operations.
-    fn book_items<C>(
-        &self,
-        mut count_fn: C,
-        max_count: u32,
-    ) -> Result<(u32, u32), StealError>
+    fn book_items<C>(&self, mut count_fn: C, max_count: u32) -> Result<(u32, u32), StealError>
     where
         C: FnMut(usize) -> usize,
     {
-        let mut heads = self.heads.load(Acquire);
-
+        let mut heads = self.heads.0.load(Acquire);
         loop {
             let (worker_head, stealer_head) = unpack(heads);
 
@@ -155,20 +155,16 @@ impl<T> Queue<T> {
             if stealer_head != worker_head {
                 return Err(StealError::Busy);
             }
-
-            let tail = self.tail.load(Acquire);
+            let tail = self.tail.0.load(Acquire);
             let item_count = tail.wrapping_sub(worker_head);
 
-            // `item_count` is tested now because `count_fn` may expect
-            // `item_count>0`.
+            // `item_count` is tested now because `count_fn` may expect `item_count` to be 0.
             if item_count == 0 {
                 return Err(StealError::Empty);
             }
 
-            // Unwind safety: it is OK if `count_fn` panics because no state has
-            // been modified yet.
-            let count = (count_fn(item_count as usize).min(max_count as usize) as u32)
-                .min(item_count);
+            // Unwind safety: it is OK if `count_fn` panics because no state has been modified.
+            let count = (count_fn(item_count as usize).min(max_count as usize) as u32).min(item_count);
 
             // The special case `count_fn() == 0` must be tested specifically,
             // because if the compare-exchange succeeds with `count=0`, the new
@@ -179,17 +175,14 @@ impl<T> Queue<T> {
             if count == 0 {
                 return Err(StealError::Empty);
             }
-
+            
             // Move the worker head only.
             let new_heads = pack(worker_head.wrapping_add(count), stealer_head);
 
             // Attempt to book the slots. Only one stealer can succeed since
             // once this atomic is changed, the other thread will necessarily
             // observe a mismatch between the two heads.
-            match self
-                .heads
-                .compare_exchange_weak(heads, new_heads, Acquire, Acquire)
-            {
+            match self.heads.0.compare_exchange_weak(heads, new_heads, Acquire, Acquire) {
                 Ok(_) => return Ok((stealer_head, count)),
                 // We lost the race to a concurrent pop or steal operation, or
                 // the CAS failed spuriously; try again.
@@ -197,18 +190,16 @@ impl<T> Queue<T> {
             }
         }
     }
-
+    
     /// Capacity of the queue.
-    #[inline]
-    fn capacity(&self) -> u32 {
-        self.mask.wrapping_add(1)
-    }
+    #[inline(always)]
+    fn capacity(&self) -> u32 { N as u32 }
 }
 
-impl<T> Drop for Queue<T> {
+impl<T, const N: usize> Drop for Queue<T, N> {
     fn drop(&mut self) {
-        let worker_head = unpack(self.heads.load(Relaxed)).0;
-        let tail = self.tail.load(Relaxed);
+        let worker_head = unpack(self.heads.0.load(Relaxed)).0;
+        let tail = self.tail.0.load(Relaxed);
 
         let count = tail.wrapping_sub(worker_head);
         for offset in 0..count {
@@ -219,11 +210,11 @@ impl<T> Drop for Queue<T> {
 
 /// Handle for single-threaded FIFO push and pop operations.
 #[derive(Debug)]
-pub struct Worker<T> {
-    queue: Arc<Queue<T>>,
+pub struct Worker<T: 'static, const N: usize> {
+    pub queue: &'static Queue<T, N>,
 }
 
-impl<T> Worker<T> {
+impl<T, const N: usize> Worker<T, N> {
     /// Creates a new queue and returns a `Worker` handle.
     ///
     /// **The capacity of a queue is always a power of two**. It is set to the
@@ -235,29 +226,7 @@ impl<T> Worker<T> {
     /// This method will panic if the minimum requested capacity is greater than
     /// 2³¹ on targets that support 64-bit atomics, or greater than 2¹⁵ on
     /// targets that only support 32-bit atomics.
-    pub fn new(min_capacity: usize) -> Self {
-        const MAX_CAPACITY: usize = 1 << (u32::BITS - 1);
-
-        assert!(
-            min_capacity <= MAX_CAPACITY,
-            "the capacity of the queue cannot exceed {}",
-            MAX_CAPACITY
-        );
-
-        // `next_power_of_two` cannot overflow since `min_capacity` cannot be
-        // greater than `MAX_CAPACITY`, and the latter is a power of two that
-        // always fits within an `u32`.
-        let capacity = min_capacity.next_power_of_two();
-        let buffer = allocate_buffer(capacity);
-        let mask = capacity as u32 - 1;
-
-        let queue = Arc::new(Queue {
-            heads: CachePadded::new(AtomicU64::new(0)),
-            tail: CachePadded::new(AtomicU32::new(0)),
-            buffer,
-            mask,
-        });
-
+    pub const fn new(queue: &'static Queue<T, N>) -> Self {
         Worker { queue }
     }
 
@@ -265,7 +234,7 @@ impl<T> Worker<T> {
     ///
     /// An arbitrary number of `Stealer` handles can be created, either using
     /// this method or cloning an existing `Stealer` handle.
-    pub fn stealer(&self) -> Stealer<T> {
+    pub fn stealer(&self) -> Stealer<T, N> {
         Stealer {
             queue: self.queue.clone(),
         }
@@ -277,18 +246,18 @@ impl<T> Worker<T> {
     /// count to the underlying queue is not modified. The returned reference
     /// can in particular be used to perform a cheap equality check with another
     /// `Stealer` and verify that it is associated to the same `Worker`.
-    pub fn stealer_ref(&self) -> &Stealer<T> {
+    pub fn stealer_ref(&self) -> &Stealer<T, N> {
         // Sanity check to assess that `queue` has indeed the size and alignment
         // of a `Stealer` (this assert is optimized away in release mode).
-        assert_eq!(Layout::for_value(&self.queue), Layout::new::<Stealer<T>>());
+        assert_eq!(Layout::for_value(self), Layout::new::<Stealer<T, N>>());
 
         // Safety: `self.queue` has the size and alignment of `Stealer` since
-        // the latter is a `repr(transparent)` type over an `Arc<Queue<T>>`. The
+        // the latter is a `repr(transparent)` type over an `Arc<Queue<T, N>>`. The
         // lifetime of the returned reference is bounded by the lifetime of
         // `&self`. The soundness of providing a `Stealer` from a `Worker` is
         // already assumed by the `stealer()` method, so providing a short-lived
         // reference to a `Stealer` does not in itself modify safety guarantees.
-        unsafe { transmute::<&'_ Arc<Queue<T>>, &'_ Stealer<T>>(&self.queue) }
+        unsafe { transmute::<&Self, &Stealer<T, N>>(self) }
     }
 
     /// Returns the capacity of the queue.
@@ -302,8 +271,8 @@ impl<T> Worker<T> {
     /// Note that that the spare capacity may be underestimated due to
     /// concurrent stealing operations.
     pub fn spare_capacity(&self) -> usize {
-        let stealer_head = unpack(self.queue.heads.load(Relaxed)).1;
-        let tail = self.queue.tail.load(Relaxed);
+        let stealer_head = unpack(self.queue.heads.0.load(Relaxed)).1;
+        let tail = self.queue.tail.0.load(Relaxed);
 
         // Aggregate count of available items (those which can be popped) and of
         // items currently being stolen.
@@ -318,8 +287,8 @@ impl<T> Worker<T> {
     /// context, but it is warranted that if `is_empty()` returns true, a
     /// subsequent call to `pop()` will fail.
     pub fn is_empty(&self) -> bool {
-        let worker_head = unpack(self.queue.heads.load(Relaxed)).0;
-        let tail = self.queue.tail.load(Relaxed);
+        let worker_head = unpack(self.queue.heads.0.load(Relaxed)).0;
+        let tail = self.queue.tail.0.load(Relaxed);
 
         tail == worker_head
     }
@@ -331,11 +300,9 @@ impl<T> Worker<T> {
     /// This will fail if the queue is full, in which case the item is returned
     /// as the error field.
     pub fn push(&self, item: T) -> Result<(), T> {
-        let stealer_head = unpack(self.queue.heads.load(Acquire)).1;
-        let tail = self.queue.tail.load(Relaxed);
-
-        // Check that the buffer is not full.
-        if tail.wrapping_sub(stealer_head) > self.queue.mask {
+        let stealer_head = unpack(self.queue.heads.0.load(Acquire)).1;
+        let tail = self.queue.tail.0.load(Relaxed);
+        if tail.wrapping_sub(stealer_head) >= N as u32 {
             return Err(item);
         }
 
@@ -347,8 +314,7 @@ impl<T> Worker<T> {
         // Ordering: the Release ordering ensures that the subsequent
         // acquisition of this atomic by a stealer will make the previous write
         // visible.
-        self.queue.tail.store(tail.wrapping_add(1), Release);
-
+        self.queue.tail.0.store(tail.wrapping_add(1), Release);
         Ok(())
     }
 
@@ -360,10 +326,10 @@ impl<T> Worker<T> {
     /// Otherwise, the iterator is dropped while still holding the items in
     /// excess.
     pub fn extend<I: IntoIterator<Item = T>>(&self, iter: I) {
-        let stealer_head = unpack(self.queue.heads.load(Acquire)).1;
-        let mut tail = self.queue.tail.load(Relaxed);
+        let stealer_head = unpack(self.queue.heads.0.load(Acquire)).1;
+        let mut tail = self.queue.tail.0.load(Relaxed);
 
-        let max_tail = stealer_head.wrapping_add(self.queue.capacity());
+        let max_tail = stealer_head.wrapping_add(N as u32);
         for item in iter {
             // Check whether the buffer is full.
             if tail == max_tail {
@@ -379,18 +345,18 @@ impl<T> Worker<T> {
         // Ordering: the Release ordering ensures that the subsequent
         // acquisition of this atomic by a stealer will make the previous write
         // visible.
-        self.queue.tail.store(tail, Release);
+        self.queue.tail.0.store(tail, Release);
     }
 
     /// Attempts to pop one item from the head of the queue.
     ///
     /// This returns None if the queue is empty.
     pub fn pop(&self) -> Option<T> {
-        let mut heads = self.queue.heads.load(Acquire);
+        let mut heads = self.queue.heads.0.load(Acquire);
 
         let prev_worker_head = loop {
             let (worker_head, stealer_head) = unpack(heads);
-            let tail = self.queue.tail.load(Relaxed);
+            let tail = self.queue.tail.0.load(Relaxed);
 
             // Check if the queue is empty.
             if tail == worker_head {
@@ -405,12 +371,7 @@ impl<T> Worker<T> {
             );
 
             // Attempt to book the items.
-            let res = self
-                .queue
-                .heads
-                .compare_exchange_weak(heads, next_heads, AcqRel, Acquire);
-
-            match res {
+            match self.queue.heads.0.compare_exchange_weak(heads, next_heads, AcqRel, Acquire) {
                 Ok(_) => break worker_head,
                 // We lost the race to a stealer or the CAS failed spuriously; try again.
                 Err(h) => heads = h,
@@ -444,47 +405,39 @@ impl<T> Worker<T> {
     /// An error is returned in the following cases:
     /// 1) no item was stolen, either because the queue is empty or `N` is 0,
     /// 2) a concurrent stealing operation is ongoing.
-    pub fn drain<C>(&self, count_fn: C) -> Result<Drain<'_, T>, StealError>
+    pub fn drain<C>(&self, count_fn: C) -> Result<Drain<'_, T, N>, StealError>
     where
         C: FnMut(usize) -> usize,
     {
         let (head, count) = self.queue.book_items(count_fn, u32::MAX)?;
-
         Ok(Drain {
-            queue: &self.queue,
+            queue: self.queue,
             head,
-            from_head: head,
             to_head: head.wrapping_add(count),
         })
     }
 }
 
-impl<T> UnwindSafe for Worker<T> {}
-impl<T> RefUnwindSafe for Worker<T> {}
-unsafe impl<T: Send> Send for Worker<T> {}
+impl<T, const N: usize> UnwindSafe for Worker<T, N> {}
+impl<T, const N: usize> RefUnwindSafe for Worker<T, N> {}
+unsafe impl<T: Send, const N: usize> Send for Worker<T, N> {}
 
-/// A draining iterator for [`Worker<T>`].
+/// A draining iterator for [`Worker<T, N>`].
 ///
 /// This iterator is created by [`Worker::drain`]. See its documentation for
 /// more.
 #[derive(Debug)]
-pub struct Drain<'a, T> {
-    queue: &'a Queue<T>,
+pub struct Drain<'a, T, const N: usize> {
+    queue: &'a Queue<T, N>,
     head: u32,
-    from_head: u32,
     to_head: u32,
 }
 
-impl<'a, T> Iterator for Drain<'a, T> {
+impl<'a, T, const N: usize> Iterator for Drain<'a, T, N> {
     type Item = T;
-
     fn next(&mut self) -> Option<T> {
-        if self.head == self.to_head {
-            return None;
-        }
-
-        let item = Some(unsafe { self.queue.read_at(self.head) });
-
+        if self.head == self.to_head { return None; }
+        let item = unsafe { self.queue.read_at(self.head) };
         self.head = self.head.wrapping_add(1);
 
         // We cannot rely on the caller to call `next` again after the last item
@@ -492,41 +445,24 @@ impl<'a, T> Iterator for Drain<'a, T> {
         // last item.
         if self.head == self.to_head {
             // Signal that the stealing operation has completed.
-            let mut heads = self.queue.heads.load(Relaxed);
+            let mut heads = self.queue.heads.0.load(Relaxed);
             loop {
-                let (worker_head, _stealer_head) = unpack(heads);
-
-                let res = self.queue.heads.compare_exchange_weak(
-                    heads,
-                    pack(worker_head, worker_head),
-                    AcqRel,
-                    Acquire,
-                );
-
-                match res {
+                let (worker_head, _) = unpack(heads);
+                match self.queue.heads.0.compare_exchange_weak(heads, pack(worker_head, worker_head), AcqRel, Acquire) {
                     Ok(_) => break,
-                    Err(h) => {
-                        heads = h;
-                    }
+                    Err(h) => heads = h,
                 }
             }
         }
-
-        item
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        let sz = self.to_head.wrapping_sub(self.head) as usize;
-
-        (sz, Some(sz))
+        Some(item)
     }
 }
 
-impl<'a, T> ExactSizeIterator for Drain<'a, T> {}
+impl<'a, T, const N: usize> ExactSizeIterator for Drain<'a, T, N> {}
 
-impl<'a, T> FusedIterator for Drain<'a, T> {}
+impl<'a, T, const N: usize> FusedIterator for Drain<'a, T, N> {}
 
-impl<'a, T> Drop for Drain<'a, T> {
+impl<'a, T, const N: usize> Drop for Drain<'a, T, N> {
     fn drop(&mut self) {
         // Drop all items and make sure the head is updated so that subsequent
         // stealing operations can succeed.
@@ -534,19 +470,19 @@ impl<'a, T> Drop for Drain<'a, T> {
     }
 }
 
-impl<'a, T> UnwindSafe for Drain<'a, T> {}
-impl<'a, T> RefUnwindSafe for Drain<'a, T> {}
-unsafe impl<'a, T: Send> Send for Drain<'a, T> {}
-unsafe impl<'a, T: Send> Sync for Drain<'a, T> {}
+impl<'a, T, const N: usize> UnwindSafe for Drain<'a, T, N> {}
+impl<'a, T, const N: usize> RefUnwindSafe for Drain<'a, T, N> {}
+unsafe impl<'a, T: Send, const N: usize> Send for Drain<'a, T, N> {}
+unsafe impl<'a, T: Send, const N: usize> Sync for Drain<'a, T, N> {}
 
 /// Handle for multi-threaded stealing operations.
 #[derive(Debug)]
 #[repr(transparent)]
-pub struct Stealer<T> {
-    queue: Arc<Queue<T>>,
+pub struct Stealer<T: 'static, const N: usize> {
+    pub queue: &'static Queue<T, N>,
 }
 
-impl<T> Stealer<T> {
+impl<T, const N: usize> Stealer<T, N> {
     /// Attempts to steal items from the head of the queue and move them to the
     /// tail of another queue.
     ///
@@ -563,16 +499,16 @@ impl<T> Stealer<T> {
     /// 1) no item was stolen, either because the queue is empty, the
     ///    destination is full or `N` is 0,
     /// 2) a concurrent stealing operation is ongoing.
-    pub fn steal<C>(&self, dest: &Worker<T>, count_fn: C) -> Result<usize, StealError>
+    pub fn steal<C>(&self, dest: &Worker<T, N>, count_fn: C) -> Result<usize, StealError>
     where
         C: FnMut(usize) -> usize,
     {
         // Compute the free capacity of the destination queue.
         //
         // Ordering: see `Worker::push()` method.
-        let dest_tail = dest.queue.tail.load(Relaxed);
-        let dest_stealer_head = unpack(dest.queue.heads.load(Acquire)).1;
-        let dest_free_capacity = dest.queue.capacity() - dest_tail.wrapping_sub(dest_stealer_head);
+        let dest_tail = dest.queue.tail.0.load(Relaxed);
+        let dest_stealer_head = unpack(dest.queue.heads.0.load(Acquire)).1;
+        let dest_free_capacity = N as u32 - dest_tail.wrapping_sub(dest_stealer_head);
 
         let (stealer_head, transfer_count) = self.queue.book_items(count_fn, dest_free_capacity)?;
 
@@ -583,34 +519,22 @@ impl<T> Stealer<T> {
                 dest.queue.write_at(dest_tail.wrapping_add(offset), item);
             }
         }
-
         // Make the moved items visible by updating the destination tail position.
         //
         // Ordering: see comments in the `push()` method.
-        dest.queue
-            .tail
-            .store(dest_tail.wrapping_add(transfer_count), Release);
+        dest.queue.tail.0.store(dest_tail.wrapping_add(transfer_count), Release);
 
         // Signal that the stealing operation has completed.
-        let mut heads = self.queue.heads.load(Relaxed);
+        let mut heads = self.queue.heads.0.load(Relaxed);
         loop {
-            let (worker_head, _sh) = unpack(heads);
-
-            let res = self.queue.heads.compare_exchange_weak(
-                heads,
-                pack(worker_head, worker_head),
-                AcqRel,
-                Acquire,
-            );
-
-            match res {
+            let (worker_head, _) = unpack(heads);
+            match self.queue.heads.0.compare_exchange_weak(heads, pack(worker_head, worker_head), AcqRel, Acquire) {
                 Ok(_) => return Ok(transfer_count as usize),
-                Err(h) => {
-                    heads = h;
-                }
+                Err(h) => heads = h,
             }
         }
     }
+
 
     /// Attempts to steal items from the head of the queue, returning one of
     /// them directly and moving the others to the tail of another queue.
@@ -635,15 +559,15 @@ impl<T> Stealer<T> {
     /// an error as long as one element could be returned directly. This can
     /// occur if the destination queue is full, if the source queue has only one
     /// item or if `N` is 1.
-    pub fn steal_and_pop<C>(&self, dest: &Worker<T>, count_fn: C) -> Result<(T, usize), StealError>
+    pub fn steal_and_pop<C>(&self, dest: &Worker<T, N>, count_fn: C) -> Result<(T, usize), StealError>
     where
         C: FnMut(usize) -> usize,
     {
         // Compute the free capacity of the destination queue.
         //
         // Ordering: see `Worker::push()` method.
-        let dest_tail = dest.queue.tail.load(Relaxed);
-        let dest_stealer_head = unpack(dest.queue.heads.load(Acquire)).1;
+        let dest_tail = dest.queue.tail.0.load(Relaxed);
+        let dest_stealer_head = unpack(dest.queue.heads.0.load(Acquire)).1;
         let dest_free_capacity = dest.queue.capacity() - dest_tail.wrapping_sub(dest_stealer_head);
 
         let (stealer_head, count) = self.queue.book_items(count_fn, dest_free_capacity + 1)?;
@@ -668,14 +592,14 @@ impl<T> Stealer<T> {
         // Ordering: see comments in the `push()` method.
         dest.queue
             .tail
-            .store(dest_tail.wrapping_add(transfer_count), Release);
+            .0.store(dest_tail.wrapping_add(transfer_count), Release);
 
         // Signal that the stealing operation has completed.
-        let mut heads = self.queue.heads.load(Relaxed);
+        let mut heads = self.queue.heads.0.load(Relaxed);
         loop {
             let (worker_head, _sh) = unpack(heads);
 
-            let res = self.queue.heads.compare_exchange_weak(
+            let res = self.queue.heads.0.compare_exchange_weak(
                 heads,
                 pack(worker_head, worker_head),
                 AcqRel,
@@ -692,7 +616,7 @@ impl<T> Stealer<T> {
     }
 }
 
-impl<T> Clone for Stealer<T> {
+impl<T: 'static, const N: usize> Clone for Stealer<T, N> {
     fn clone(&self) -> Self {
         Stealer {
             queue: self.queue.clone(),
@@ -700,15 +624,11 @@ impl<T> Clone for Stealer<T> {
     }
 }
 
-impl<T> PartialEq for Stealer<T> {
-    fn eq(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.queue, &other.queue)
-    }
+impl<T, const N: usize> PartialEq for Stealer<T, N> {
+    fn eq(&self, other: &Self) -> bool { core::ptr::eq(self.queue, other.queue) }
 }
-
-impl<T> Eq for Stealer<T> {}
-
-impl<T> UnwindSafe for Stealer<T> {}
-impl<T> RefUnwindSafe for Stealer<T> {}
-unsafe impl<T: Send> Send for Stealer<T> {}
-unsafe impl<T: Send> Sync for Stealer<T> {}
+impl<T, const N: usize> Eq for Stealer<T, N> {}
+impl<T, const N: usize> UnwindSafe for Stealer<T, N> {}
+impl<T, const N: usize> RefUnwindSafe for Stealer<T, N> {}
+unsafe impl<T: Send, const N: usize> Send for Stealer<T, N> {}
+unsafe impl<T: Send, const N: usize> Sync for Stealer<T, N> {}

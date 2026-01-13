@@ -51,11 +51,7 @@
 
 extern crate alloc;
 
-use alloc::boxed::Box;
-use alloc::vec::Vec;
-use core::cell::UnsafeCell;
 use core::fmt;
-use core::mem::MaybeUninit;
 pub mod fifo;
 pub mod lifo;
 
@@ -89,16 +85,4 @@ fn unpack(value: u64) -> (u32, u32) {
         (value >> u32::BITS) as u32,
         value as u32,
     )
-}
-
-fn allocate_buffer<T>(len: usize) -> Box<[UnsafeCell<MaybeUninit<T>>]> {
-    let mut buffer = Vec::with_capacity(len);
-
-    // Note: resizing the vector would normally be an O(N) operation due to
-    // initialization, but initialization is optimized out in release mode since
-    // an `UnsafeCell<MaybeUninit>` does not actually need to be initialized as
-    // `UnsafeCell` is `repr(transparent)`.
-    buffer.resize_with(len, || UnsafeCell::new(MaybeUninit::uninit()));
-
-    buffer.into_boxed_slice()
 }
