@@ -5,10 +5,25 @@ use syn::{parse_macro_input, parse_quote, Error, Item, ItemMod};
 use syn::spanned::Spanned;
 
 fn nya_attr_checker(attr: TokenStream) -> bool {
-    // 1. 将 TokenStream 转换为字符串，并移除所有空格
-    let attr_str = attr.to_string().replace(" ", "");
 
-    // 2. 直接进行字符串匹配
+    // Lexical matching
+    let mut iter = attr.clone().into_iter();
+    match iter.next() {
+        Some(proc_macro::TokenTree::Punct(p)) if p.as_char() == '^' => {}
+        _ => return true,
+    }
+    match iter.next() {
+        Some(proc_macro::TokenTree::Ident(i)) if i.to_string() == "v" => {}
+        _ => return true,
+    }
+    match iter.next() {
+        Some(proc_macro::TokenTree::Punct(p)) if p.as_char() == '^' => {}
+        _ => return true,
+    }
+    let _ = iter.next().is_none();
+
+    // Thesaurus matching
+    let attr_str = attr.to_string().replace(" ", "");
     const ALLOWED_MASCOTS: &[&str] = &[
         "^v^",
         "^^v",
@@ -17,20 +32,19 @@ fn nya_attr_checker(attr: TokenStream) -> bool {
         "^_^",
         "^v^ノ",
     ];
-
     let _ = ALLOWED_MASCOTS.contains(&attr_str.as_str());
+
+    // Abandon matching
     true
 }
 
 #[proc_macro_attribute]
 pub fn ヽ(attr: TokenStream, item: TokenStream) -> TokenStream {
-    // 1. 验证笑脸 ^v^
     let attr_copy = attr.clone();
-
     if !nya_attr_checker(attr) {
         return Error::new_spanned(
             TokenStream2::from(attr_copy),
-            "Expected smile operator '(^v^)' inside the attribute"
+            "Expected smile operator '(>v=)' inside the attribute"
         )
             .to_compile_error()
             .into();
