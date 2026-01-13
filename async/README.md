@@ -9,7 +9,7 @@ The author wrote it in reverse order for convenience.
 Debug Run:
 ```shell
 qemu-system-x86_64 -drive if=pflash,format=raw,file=qemu/OVMF.fd -drive format=raw,file=fat:rw:qemu -m 4G -device usb-ehci -device usb-tablet -device virtio-gpu-pci -smp 2
-mv .\target\x86_64-unknown-uefi\debug\ueficraft.efi .\qemu\EFI\BOOT\BOOTX64.EFI
+mv ..\target\x86_64-unknown-uefi\debug\uefi-async.efi .\qemu\EFI\BOOT\BOOTX64.EFI
 rm .\qemu\EFI\BOOT\BOOTX64.EFI
 cargo build
 ```
@@ -17,7 +17,7 @@ cargo build
 Run:
 ```shell
 qemu-system-x86_64 -drive if=pflash,format=raw,file=qemu/OVMF.fd -drive format=raw,file=fat:rw:qemu -m 4G -device usb-ehci -device usb-tablet -device virtio-gpu-pci -smp 4 -cpu max -monitor stdio
-mv .\target\x86_64-unknown-uefi\release\ueficraft.efi .\qemu\EFI\BOOT\BOOTX64.EFI
+mv ..\target\x86_64-unknown-uefi\release\uefi-async.efi .\qemu\EFI\BOOT\BOOTX64.EFI
 rm .\qemu\EFI\BOOT\BOOTX64.EFI
 cargo build --release
 ```
