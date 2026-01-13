@@ -14,7 +14,7 @@ Build a `no_std`, 0-allocation, high-performance asynchronous executor for UEFI 
 ### 3.1 TaskNode<F>
 Each task must be wrapped in a `TaskNode` with the following memory layout:
 - `state`: `AtomicUsize` (States: Idle, Queued, Running, Stealing, Completed).
-- `future`: `UnsafeCell<F>` (The generated state machine).
+- `future`: `StaticCell<F>` (The generated state machine).
 - `pointers`: `AtomicPtr` for `prev` and `next` to form intrusive lists.
 - `waker_context`: Metadata to track which core currently "owns" the task.
 
@@ -27,7 +27,7 @@ Each task must be wrapped in a `TaskNode` with the following memory layout:
 
 ### 4.1 Memory Safety & Pinning
 - All tasks must be `Pinned` because they are stored in static memory and cannot be moved once execution starts.
-- Use `UnsafeCell` and `Atomic` operations to bypass the borrow checker safely in a multi-core context.
+- Use `StaticCell` and `Atomic` operations to bypass the borrow checker safely in a multi-core context.
 
 ### 4.2 Multi-Core Synchronization
 - Implement the `Waker` trait by wrapping a pointer to the `TaskNode`.

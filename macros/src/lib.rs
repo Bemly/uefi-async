@@ -5,7 +5,6 @@ use syn::{parse_macro_input, parse_quote, Error, Item, ItemMod};
 use syn::spanned::Spanned;
 
 fn nya_attr_checker(attr: TokenStream) -> bool {
-
     // Lexical matching
     let mut iter = attr.clone().into_iter();
     match iter.next() {
@@ -32,24 +31,27 @@ fn nya_attr_checker(attr: TokenStream) -> bool {
         "^_^",
         "^v^ノ",
     ];
-    let _ = ALLOWED_MASCOTS.contains(&attr_str.as_str());
-
-    // Abandon matching
-    true
+    ALLOWED_MASCOTS.contains(&attr_str.as_str())
 }
 
 #[proc_macro_attribute]
 pub fn ヽ(attr: TokenStream, item: TokenStream) -> TokenStream {
-    let attr_copy = attr.clone();
-    if !nya_attr_checker(attr) {
-        return Error::new_spanned(
-            TokenStream2::from(attr_copy),
-            "Expected smile operator '(>v=)' inside the attribute"
-        )
-            .to_compile_error()
-            .into();
-    }
+    // let attr_copy = attr.clone();
+    // if !nya_attr_checker(attr) {
+    //     return Error::new_spanned(
+    //         TokenStream2::from(attr_copy),
+    //         "Expected smile operator '(>v=)' inside the attribute"
+    //     )
+    //         .to_compile_error()
+    //         .into();
+    // }
 
+    match attr.to_string().replace(" ", "").as_str() {
+        "'ε'" => init(item),
+        _ => init(item)
+    }
+}
+fn init(item: TokenStream) -> TokenStream {
     // 2. 解析 mod MyApp { ... }
     let mut input_mod = parse_macro_input!(item as ItemMod);
 

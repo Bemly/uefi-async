@@ -1,6 +1,10 @@
 #![no_main]
 #![no_std]
 
+extern crate alloc;
+
+mod st3;
+
 use core::time::Duration;
 use uefi::boot::stall;
 use uefi::prelude::*;
@@ -55,6 +59,7 @@ mod example_app {
         pub num_cores: usize,
     }
 
+
     extern "efiapi" fn process(arg: *mut c_void) {
         if arg.is_null() { return; }
         let ctx = unsafe { &mut *arg.cast::<Context>() };
@@ -63,12 +68,20 @@ mod example_app {
         let core_info = ctx.mp.get_processor_info(core_id).expect("Failed to get processor info");
 
 
+        // 获取当前核心的本地任务视图（这里需要一个全局静态数组）
         loop {
-            if core_info.is_bsp() {
-
-            } else {
-
-            }
+            // // 1. 尝试寻找属于自己的任务
+            // if let Some(task) = find_local_task(core_id) {
+            //     poll_task(task);
+            // }
+            // // 2. 尝试从相邻核心窃取
+            // else if let Some(stolen_task) = try_steal(core_id, ctx.num_cores) {
+            //     poll_task(stolen_task);
+            // }
+            // // 3. 协作式闲置
+            // else {
+            //     agent_idle(); // 调用你的 idle 函数，可以在里面执行 pause 指令省电
+            // }
         }
     }
 
