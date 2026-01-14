@@ -239,7 +239,7 @@ pub fn task(attr: TokenStream, item: TokenStream) -> TokenStream {
             const fn __task_pool_get<F, Args, Fut>(_: F) -> &'static #executor_path::TaskPool<Fut, POOL_SIZE>
             where
                 F: #executor_path::TaskFn<Args, Fut = Fut>,
-                Fut: ::core::future::Future<Output = ()> + 'static,
+                Fut: ::core::future::Future<Output = ()> + 'static + ::core::marker::Send + ::core::marker::Sync,
             {
                 unsafe { &*(POOL.as_ptr() as *const #executor_path::TaskPool<Fut, POOL_SIZE>) }
             }

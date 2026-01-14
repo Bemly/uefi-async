@@ -557,8 +557,8 @@ impl<'a, T: 'static, const N: usize> Drop for Drain<'a, T, N> {
 
 impl<'a, T: 'static, const N: usize> UnwindSafe for Drain<'a, T, N> {}
 impl<'a, T: 'static, const N: usize> RefUnwindSafe for Drain<'a, T, N> {}
-unsafe impl<'a, T: 'static + Send, const N: usize> Send for Drain<'a, T, N> {}
-unsafe impl<'a, T: 'static + Send, const N: usize> Sync for Drain<'a, T, N> {}
+unsafe impl<'a, T: 'static, const N: usize> Send for Drain<'a, T, N> {}
+unsafe impl<'a, T: 'static, const N: usize> Sync for Drain<'a, T, N> {}
 
 /// Handle for multi-threaded stealing operations.
 #[derive(Debug)]
@@ -717,5 +717,5 @@ impl<T: 'static, const N: usize> Copy for Stealer<T, N> {}
 impl<T: 'static, const N: usize> Eq for Stealer<T, N> {}
 impl<T: 'static, const N: usize> UnwindSafe for Stealer<T, N> {}
 impl<T: 'static, const N: usize> RefUnwindSafe for Stealer<T, N> {}
-unsafe impl<T: 'static + Send, const N: usize> Send for Stealer<T, N> {}
-unsafe impl<T: 'static + Send, const N: usize> Sync for Stealer<T, N> {}
+unsafe impl<T: 'static, const N: usize> Send for Stealer<T, N> {}
+unsafe impl<T: 'static, const N: usize> Sync for Stealer<T, N> {}
