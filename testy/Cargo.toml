@@ -1,0 +1,9 @@
+[package]
+name = "my-testy"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+uefi = { version = "0.36.1", features = ["logger", "alloc", "global_allocator", "panic_handler"] }
+uefi-async = { path = "../async" }
+uefi-async-macros = { path = "../macros" }

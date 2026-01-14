@@ -48,9 +48,6 @@
 //! assert_eq!(pop_count + steal_count, 4);
 //! ```
 #![warn(missing_docs, missing_debug_implementations, unreachable_pub)]
-
-extern crate alloc;
-
 use core::fmt;
 pub mod fifo;
 pub mod lifo;

@@ -63,16 +63,16 @@ use crate::st3::{pack, unpack, StealError};
 pub struct Queue<T, const N: usize> {
     /// Worker area (128B)
     /// Total number of push operations.
-    push_count: AtomicU32,
-    _reserved: [u8; 124],
+    pub push_count: AtomicU32,
+    pub _true_sharing_barrier: [u8; 124],
 
     // 组 2: 数据区 (作为中间隔离带)
     // 假设 T 是指针，N=64 时占 512 字节，完美隔离组1和组3
     /// Queue items.
-    buffer: [UnsafeCell<MaybeUninit<T>>; N],
+    pub buffer: [UnsafeCell<MaybeUninit<T>>; N],
 
     /// Stealer area (128B)
-    stealer_data: StealerData,
+    pub stealer_data: StealerData,
 }
 
 #[derive(Debug)]
@@ -82,12 +82,12 @@ pub struct StealerData {
     /// head that a stealer will set once stealing is complete. This head
     /// position always coincides with the `head` field below if the last
     /// stealing operation has completed.
-    pop_count_and_head: AtomicU64,
+    pub pop_count_and_head: AtomicU64,
     /// Position of the queue head, updated after completion of each stealing operation.
-    head: AtomicU32,
+    pub head: AtomicU32,
 }
 
-impl<T, const N: usize> Queue<T, N> {
+impl<T: 'static, const N: usize> Queue<T, N> {
     const CHECK_N: () = assert!(N.is_power_of_two(), "N must be a power of two");
     const MASK: u32 = (N - 1) as u32;
 
@@ -244,27 +244,13 @@ impl<T, const N: usize> Queue<T, N> {
     }
 }
 
-impl<T, const N: usize> Drop for Queue<T, N> {
-    fn drop(&mut self) {
-        let head = self.stealer_data.head.load(Relaxed);
-        let push_count = self.push_count.load(Relaxed);
-        let pop_count = unpack(self.stealer_data.pop_count_and_head.load(Relaxed)).0;
-        let tail = push_count.wrapping_sub(pop_count);
-
-        let count = tail.wrapping_sub(head);
-        for offset in 0..count {
-            drop(unsafe { self.read_at(head.wrapping_add(offset)) });
-        }
-    }
-}
-
 /// Handle for single-threaded LIFO push and pop operations.
 #[derive(Debug)]
 pub struct Worker<T: 'static, const N: usize> {
     pub queue: &'static Queue<T, N>, // 直接使用常量 N
 }
 
-impl<T, const N: usize> Worker<T, N> {
+impl<T: 'static, const N: usize> Worker<T, N> {
     /// Creates a new queue and returns a `Worker` handle.
     ///
     /// **The capacity of a queue is always a power of two**. It is set to the
@@ -347,14 +333,13 @@ impl<T, const N: usize> Worker<T, N> {
     /// as the error field.
     pub fn push(&self, item: T) -> Result<(), T> {
         let push_count = self.queue.push_count.load(Relaxed);
-        let pop_count = unpack(self.queue.stealer_data.pop_count_and_head.load(Relaxed)).0;
-        let tail = push_count.wrapping_sub(pop_count);
-
         // Ordering: Acquire ordering is required to synchronize with the
         // Release of the `head` atomic at the end of a stealing operation and
         // ensure that the stealer has finished copying the items from the
         // buffer.
-        let head = self.queue.stealer_data.head.load(Acquire);
+        let pop_count_and_head = self.queue.stealer_data.pop_count_and_head.load(Acquire);
+        let (pop_count, head) = unpack(pop_count_and_head);
+        let tail = push_count.wrapping_sub(pop_count);
 
         // Check that the buffer is not full.
         if tail.wrapping_sub(head) >= N as u32 {
@@ -496,24 +481,36 @@ impl<T, const N: usize> Worker<T, N> {
             end: new_head,
         })
     }
+
+    /// 仅在需要手动释放队列中所有指针指向的内存时使用
+    pub fn clear<F>(&self, mut dropper: F)
+    where F: FnMut(T)
+    {
+        // 批量拿出指针并交给 dropper 处理（比如执行 free）
+        if let Ok(drain) = self.drain(|count| count) {
+            for ptr in drain {
+                dropper(ptr);
+            }
+        }
+    }
 }
 
-impl<T, const N: usize> UnwindSafe for Worker<T, N> {}
-impl<T, const N: usize> RefUnwindSafe for Worker<T, N> {}
-unsafe impl<T: Send, const N: usize> Send for Worker<T, N> {}
+impl<T: 'static, const N: usize> UnwindSafe for Worker<T, N> {}
+impl<T: 'static, const N: usize> RefUnwindSafe for Worker<T, N> {}
+unsafe impl<T: 'static + Send, const N: usize> Send for Worker<T, N> {}
 
 /// A draining iterator for [`Worker<T, N>`].
 ///
 /// This iterator is created by [`Worker::drain`]. See its documentation for
 /// more information.
 #[derive(Debug)]
-pub struct Drain<'a, T, const N: usize> {
+pub struct Drain<'a, T: 'static, const N: usize> {
     queue: &'a Queue<T, N>,
     current: u32,
     end: u32,
 }
 
-impl<'a, T, const N: usize> Iterator for Drain<'a, T, N> {
+impl<'a, T: 'static, const N: usize> Iterator for Drain<'a, T, N> {
     type Item = T;
 
     fn next(&mut self) -> Option<T> {
@@ -546,11 +543,11 @@ impl<'a, T, const N: usize> Iterator for Drain<'a, T, N> {
     }
 }
 
-impl<'a, T, const N: usize> ExactSizeIterator for Drain<'a, T, N> {}
+impl<'a, T: 'static, const N: usize> ExactSizeIterator for Drain<'a, T, N> {}
 
-impl<'a, T, const N: usize> FusedIterator for Drain<'a, T, N> {}
+impl<'a, T: 'static, const N: usize> FusedIterator for Drain<'a, T, N> {}
 
-impl<'a, T, const N: usize> Drop for Drain<'a, T, N> {
+impl<'a, T: 'static, const N: usize> Drop for Drain<'a, T, N> {
     fn drop(&mut self) {
         // Drop all items and make sure the head is updated so that subsequent
         // stealing operations can succeed.
@@ -558,10 +555,10 @@ impl<'a, T, const N: usize> Drop for Drain<'a, T, N> {
     }
 }
 
-impl<'a, T, const N: usize> UnwindSafe for Drain<'a, T, N> {}
-impl<'a, T, const N: usize> RefUnwindSafe for Drain<'a, T, N> {}
-unsafe impl<'a, T: Send, const N: usize> Send for Drain<'a, T, N> {}
-unsafe impl<'a, T: Send, const N: usize> Sync for Drain<'a, T, N> {}
+impl<'a, T: 'static, const N: usize> UnwindSafe for Drain<'a, T, N> {}
+impl<'a, T: 'static, const N: usize> RefUnwindSafe for Drain<'a, T, N> {}
+unsafe impl<'a, T: 'static + Send, const N: usize> Send for Drain<'a, T, N> {}
+unsafe impl<'a, T: 'static + Send, const N: usize> Sync for Drain<'a, T, N> {}
 
 /// Handle for multi-threaded stealing operations.
 #[derive(Debug)]
@@ -570,7 +567,7 @@ pub struct Stealer<T: 'static, const N: usize> {
     pub queue: &'static Queue<T, N>,
 }
 
-impl<T, const N: usize> Stealer<T, N> {
+impl<T: 'static, const N: usize> Stealer<T, N> {
     /// Attempts to steal items from the head of the queue and move them to the
     /// tail of another queue.
     ///
@@ -707,21 +704,18 @@ impl<T, const N: usize> Stealer<T, N> {
     }
 }
 
-impl<T, const N: usize> Clone for Stealer<T, N> {
-    fn clone(&self) -> Self {
-        Stealer {
-            queue: self.queue.clone(),
-        }
-    }
-}
-impl<T, const N: usize> PartialEq for Stealer<T, N> {
+impl<T: 'static, const N: usize> PartialEq for Stealer<T, N> {
     #[inline(always)]
     fn eq(&self, other: &Self) -> bool {
         core::ptr::eq(self.queue, other.queue)
     }
 }
-impl<T, const N: usize> Eq for Stealer<T, N> {}
-impl<T, const N: usize> UnwindSafe for Stealer<T, N> {}
-impl<T, const N: usize> RefUnwindSafe for Stealer<T, N> {}
-unsafe impl<T: Send, const N: usize> Send for Stealer<T, N> {}
-unsafe impl<T: Send, const N: usize> Sync for Stealer<T, N> {}
+impl<T: 'static, const N: usize> Clone for Stealer<T, N> {
+    fn clone(&self) -> Self { *self }
+}
+impl<T: 'static, const N: usize> Copy for Stealer<T, N> {}
+impl<T: 'static, const N: usize> Eq for Stealer<T, N> {}
+impl<T: 'static, const N: usize> UnwindSafe for Stealer<T, N> {}
+impl<T: 'static, const N: usize> RefUnwindSafe for Stealer<T, N> {}
+unsafe impl<T: 'static + Send, const N: usize> Send for Stealer<T, N> {}
+unsafe impl<T: 'static + Send, const N: usize> Sync for Stealer<T, N> {}

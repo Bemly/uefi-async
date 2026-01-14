@@ -1,6 +1,7 @@
 use proc_macro::TokenStream;
+use std::fmt::Display;
 use proc_macro2::TokenStream as TokenStream2;
-use quote::quote;
+use quote::{quote, ToTokens};
 use syn::{parse_macro_input, parse_quote, Error, Item, ItemMod};
 use syn::spanned::Spanned;
 
@@ -46,7 +47,7 @@ pub fn ヽ(attr: TokenStream, item: TokenStream) -> TokenStream {
     //         .into();
     // }
 
-    match attr.to_string().replace(" ", "").as_str() {
+    match attr.to_string().as_str() {
         "'ε'" => init(item),
         _ => init(item)
     }
@@ -146,4 +147,70 @@ fn init(item: TokenStream) -> TokenStream {
     };
 
     expanded.into()
+}
+
+#[proc_macro_attribute]
+pub fn task(attr: TokenStream, item: TokenStream) -> TokenStream {
+
+    // 假设你已经解析出了以下变量：
+    // #task_ident: 原函数名 (如 blinky)
+    // #task_inner_ident: 内部包装后的函数名 (如 __blinky_task)
+    // #pool_size: 从 attr 解析出的池大小
+    // #fargs: 原函数的参数列表
+    // #full_args: 传给内部函数的参数名列表
+
+    // 核心修改点：指向你自己的 crate 路径
+    let executor_path = quote!(::crate::executor);
+
+    let mut task_outer_body = quote! {
+        // 1. 定义一个辅助函数，用来从“哑”池转换为“带类型”的池
+        const fn __task_pool_get<F, Args, Fut>(_: F) -> &'static #executor_path::TaskPool<Fut, POOL_SIZE>
+        where
+            F: #executor_path::TaskFn<Args, Fut = Fut>,
+            Fut: ::core::future::Future<Output = ()> + 'static,
+        {
+            // POOL 是一个 TaskPoolHolder，我们把它 cast 回真实的 TaskPool
+            unsafe { &*(POOL.as_ptr() as *const #executor_path::TaskPool<Fut, POOL_SIZE>) }
+        }
+
+        const POOL_SIZE: usize = #pool_size;
+
+        // 2. 创建静态内存池。这里用 Holder 绕过 static 无法处理匿名 Fut 类型的问题
+        static POOL: #executor_path::TaskPoolHolder<
+            {#executor_path::task_pool_size::<_, _, _, POOL_SIZE>(#task_inner_ident)},
+            {#executor_path::task_pool_align::<_, _, _, POOL_SIZE>(#task_inner_ident)},
+        > = unsafe { 
+            // 将初始化的 TaskPool 强转为字节数组容器
+            ::core::mem::transmute(#executor_path::task_pool_new::<_, _, _, POOL_SIZE>(#task_inner_ident)) 
+        };
+
+        // 3. 这里的 spawn 应该返回你的 SpawnToken 或结果
+        // 注意：你需要确保你的 TaskPool 有一个 spawn 方法
+        unsafe { 
+            __task_pool_get(#task_inner_ident).spawn(move || #task_inner_ident(#(#full_args,)*)) 
+        }
+    };
+
+    // 如果有参数校验错误，返回 todo!() 避免级联报错
+    if !errors.is_empty() {
+        task_outer_body = quote! {
+            ::core::todo!()
+        };
+    }
+
+    let result = quote! {
+        // 原始函数被重命名后的本体
+        #[doc(hidden)]
+        #task_inner 
+
+        // 用户实际调用的函数，它现在返回一个 Token 
+        #(#task_outer_attrs)*
+        #visibility #unsafety fn #task_ident #generics (#fargs) -> Result<#executor_path::SpawnToken, #executor_path::SpawnError> #where_clause {
+            #task_outer_body
+        }
+
+        #errors
+    };
+
+    result.into()
 }

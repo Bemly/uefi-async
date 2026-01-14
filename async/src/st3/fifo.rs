@@ -101,7 +101,7 @@ impl<T, const N: usize> Queue<T, N> {
     /// written to or moved out concurrently.
     #[inline(always)]
     unsafe fn read_at(&self, position: u32) -> T {
-        self.buffer[(position & Self::MASK) as usize].get().read().assume_init()
+        unsafe { self.buffer[(position & Self::MASK) as usize].get().read().assume_init() }
     }
 
     /// Write an item at the given position.
@@ -120,7 +120,7 @@ impl<T, const N: usize> Queue<T, N> {
     /// or written to concurrently.
     #[inline(always)]
     unsafe fn write_at(&self, position: u32, item: T) {
-        self.buffer[(position & Self::MASK) as usize].get().write(MaybeUninit::new(item));
+        unsafe { self.buffer[(position & Self::MASK) as usize].get().write(MaybeUninit::new(item)) }
     }
 
     /// Attempt to book `N` items for stealing where `N` is specified by a
@@ -612,14 +612,6 @@ impl<T, const N: usize> Stealer<T, N> {
                     heads = h;
                 }
             }
-        }
-    }
-}
-
-impl<T: 'static, const N: usize> Clone for Stealer<T, N> {
-    fn clone(&self) -> Self {
-        Stealer {
-            queue: self.queue.clone(),
         }
     }
 }
