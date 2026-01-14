@@ -1,8 +1,7 @@
 use proc_macro::TokenStream;
-use std::fmt::Display;
-use proc_macro2::TokenStream as TokenStream2;
-use quote::{quote, ToTokens};
-use syn::{parse_macro_input, parse_quote, Error, Item, ItemMod};
+use quote::{format_ident, quote, ToTokens};
+use syn::{parse_macro_input, parse_quote, Error, FnArg, Item, ItemFn, ItemMod, Pat, Token};
+use syn::parse::{Parse, ParseStream};
 use syn::spanned::Spanned;
 
 fn nya_attr_checker(attr: TokenStream) -> bool {
@@ -149,67 +148,115 @@ fn init(item: TokenStream) -> TokenStream {
     expanded.into()
 }
 
+struct TaskArgs {
+    pool_size: usize,
+}
+
+impl Parse for TaskArgs {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        let mut pool_size = 1; // 默认大小
+        if !input.is_empty() {
+            let id: syn::Ident = input.parse()?;
+            if id != "pool_size" {
+                return Err(syn::Error::new(id.span(), "expected `pool_size`"));
+            }
+            input.parse::<Token![=]>()?;
+            let lit: syn::LitInt = input.parse()?;
+            pool_size = lit.base10_parse()?;
+        }
+        Ok(TaskArgs { pool_size })
+    }
+}
+
 #[proc_macro_attribute]
 pub fn task(attr: TokenStream, item: TokenStream) -> TokenStream {
+    // 1. 解析属性参数 (pool_size)
+    let args = parse_macro_input!(attr as TaskArgs);
+    let pool_size = args.pool_size;
 
-    // 假设你已经解析出了以下变量：
-    // #task_ident: 原函数名 (如 blinky)
-    // #task_inner_ident: 内部包装后的函数名 (如 __blinky_task)
-    // #pool_size: 从 attr 解析出的池大小
-    // #fargs: 原函数的参数列表
-    // #full_args: 传给内部函数的参数名列表
+    // 2. 解析函数本体
+    let mut f = parse_macro_input!(item as ItemFn);
 
-    // 核心修改点：指向你自己的 crate 路径
-    let executor_path = quote!(::crate::executor);
-
-    let mut task_outer_body = quote! {
-        // 1. 定义一个辅助函数，用来从“哑”池转换为“带类型”的池
-        const fn __task_pool_get<F, Args, Fut>(_: F) -> &'static #executor_path::TaskPool<Fut, POOL_SIZE>
-        where
-            F: #executor_path::TaskFn<Args, Fut = Fut>,
-            Fut: ::core::future::Future<Output = ()> + 'static,
-        {
-            // POOL 是一个 TaskPoolHolder，我们把它 cast 回真实的 TaskPool
-            unsafe { &*(POOL.as_ptr() as *const #executor_path::TaskPool<Fut, POOL_SIZE>) }
-        }
-
-        const POOL_SIZE: usize = #pool_size;
-
-        // 2. 创建静态内存池。这里用 Holder 绕过 static 无法处理匿名 Fut 类型的问题
-        static POOL: #executor_path::TaskPoolHolder<
-            {#executor_path::task_pool_size::<_, _, _, POOL_SIZE>(#task_inner_ident)},
-            {#executor_path::task_pool_align::<_, _, _, POOL_SIZE>(#task_inner_ident)},
-        > = unsafe { 
-            // 将初始化的 TaskPool 强转为字节数组容器
-            ::core::mem::transmute(#executor_path::task_pool_new::<_, _, _, POOL_SIZE>(#task_inner_ident)) 
-        };
-
-        // 3. 这里的 spawn 应该返回你的 SpawnToken 或结果
-        // 注意：你需要确保你的 TaskPool 有一个 spawn 方法
-        unsafe { 
-            __task_pool_get(#task_inner_ident).spawn(move || #task_inner_ident(#(#full_args,)*)) 
-        }
-    };
-
-    // 如果有参数校验错误，返回 todo!() 避免级联报错
-    if !errors.is_empty() {
-        task_outer_body = quote! {
-            ::core::todo!()
-        };
+    // 检查是否是 async
+    if f.sig.asyncness.is_none() {
+        return syn::Error::new_spanned(&f.sig, "task functions must be async")
+            .to_compile_error()
+            .into();
     }
 
-    let result = quote! {
-        // 原始函数被重命名后的本体
-        #[doc(hidden)]
-        #task_inner 
+    // 3. 准备变量名
+    let task_ident = f.sig.ident.clone(); // 原名，例如 blinky
+    let task_inner_ident = format_ident!("__{}_task", task_ident); // 内部名
 
-        // 用户实际调用的函数，它现在返回一个 Token 
-        #(#task_outer_attrs)*
-        #visibility #unsafety fn #task_ident #generics (#fargs) -> Result<#executor_path::SpawnToken, #executor_path::SpawnError> #where_clause {
-            #task_outer_body
+    // 4. 处理函数参数
+    // fargs 用于新函数的定义: (led: LED, interval: u32)
+    // full_args 用于闭包内调用原函数: (led, interval)
+    let mut fargs = Vec::new();
+    let mut full_args = Vec::new();
+
+    for arg in &f.sig.inputs {
+        match arg {
+            FnArg::Receiver(_) => {
+                return syn::Error::new_spanned(arg, "task functions cannot have `self` receiver")
+                    .to_compile_error()
+                    .into();
+            }
+            FnArg::Typed(pat_type) => {
+                fargs.push(arg.clone());
+                if let Pat::Ident(pat_id) = &*pat_type.pat {
+                    full_args.push(pat_id.ident.clone());
+                } else {
+                    return syn::Error::new_spanned(pat_type, "argument must be a simple identifier")
+                        .to_compile_error()
+                        .into();
+                }
+            }
         }
+    }
 
-        #errors
+    // 5. 修改原函数，重命名为内部名，并移除可见性修饰符（变成私有）
+    let mut task_inner = f.clone();
+    task_inner.sig.ident = task_inner_ident.clone();
+    task_inner.vis = syn::Visibility::Inherited;
+
+    // 6. 路径定义
+    let executor_path = quote!(::uefi_async);
+
+    // 7. 生成外部包装函数主体
+    let visibility = &f.vis;
+    let executor_result_path = quote!(Result<#executor_path::SpawnToken, #executor_path::SpawnError>);
+
+    let result = quote! {
+        // 内部真实的异步函数
+        #[doc(hidden)]
+        #task_inner
+
+        // 用户调用的同步启动函数
+        #visibility fn #task_ident(#(#fargs),*) -> #executor_result_path {
+            const POOL_SIZE: usize = #pool_size;
+
+            // 这里的辅助函数用来推导类型并转换指针
+            const fn __task_pool_get<F, Args, Fut>(_: F) -> &'static #executor_path::TaskPool<Fut, POOL_SIZE>
+            where
+                F: #executor_path::TaskFn<Args, Fut = Fut>,
+                Fut: ::core::future::Future<Output = ()> + 'static,
+            {
+                unsafe { &*(POOL.as_ptr() as *const #executor_path::TaskPool<Fut, POOL_SIZE>) }
+            }
+
+            // 静态内存池定义
+            static POOL: #executor_path::TaskPoolHolder<
+                {#executor_path::task_pool_size::<_, _, _, POOL_SIZE>(#task_inner_ident)},
+                {#executor_path::task_pool_align::<_, _, _, POOL_SIZE>(#task_inner_ident)},
+            > = unsafe {
+                ::core::mem::transmute(#executor_path::task_pool_new::<_, _, _, POOL_SIZE>(#task_inner_ident))
+            };
+
+            // 真正进行 Spawn 的动作
+            unsafe {
+                __task_pool_get(#task_inner_ident).spawn(move || #task_inner_ident(#(#full_args),*))
+            }
+        }
     };
 
     result.into()
