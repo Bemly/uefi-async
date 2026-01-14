@@ -6,6 +6,22 @@ use uefi::{entry, Status};
 use uefi::boot::stall;
 use uefi_async_macros::task;
 
+// use uefi_async_macros::ヽ;
+// use uefi_async_macros::ヽ as Caillo;
+// Ciallo～(∠・ω< )⌒☆
+
+// #[ヽ('ε')]
+// mod example_app {
+//     async fn master_setup() {}
+//     async fn agent_setup() {}
+//     async fn agent_main() {}
+//     fn agent_idle() {}
+//     fn on_panic() {}
+//     fn on_error() {}
+//     fn on_exit() {}
+// }
+
+
 #[task]
 async fn task() {
 

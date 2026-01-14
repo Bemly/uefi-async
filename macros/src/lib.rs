@@ -170,92 +170,81 @@ impl Parse for TaskArgs {
 
 #[proc_macro_attribute]
 pub fn task(attr: TokenStream, item: TokenStream) -> TokenStream {
-    // 1. 解析属性参数 (pool_size)
+    // 1. 解析 pool_size 参数（假设 TaskArgs 已定义）
     let args = parse_macro_input!(attr as TaskArgs);
     let pool_size = args.pool_size;
 
-    // 2. 解析函数本体
+    // 2. 解析函数
     let mut f = parse_macro_input!(item as ItemFn);
 
-    // 检查是否是 async
+    // 必须是 async
     if f.sig.asyncness.is_none() {
         return syn::Error::new_spanned(&f.sig, "task functions must be async")
             .to_compile_error()
             .into();
     }
 
-    // 3. 准备变量名
-    let task_ident = f.sig.ident.clone(); // 原名，例如 blinky
-    let task_inner_ident = format_ident!("__{}_task", task_ident); // 内部名
+    // 3. 提取标识符
+    let task_ident = f.sig.ident.clone(); // 外部调用名
+    let task_inner_ident = format_ident!("__{}_task", task_ident); // 内部异步状态机名
 
-    // 4. 处理函数参数
-    // fargs 用于新函数的定义: (led: LED, interval: u32)
-    // full_args 用于闭包内调用原函数: (led, interval)
+    // 4. 处理参数（同步包装器接收参数，闭包移动参数）
     let mut fargs = Vec::new();
     let mut full_args = Vec::new();
-
     for arg in &f.sig.inputs {
-        match arg {
-            FnArg::Receiver(_) => {
-                return syn::Error::new_spanned(arg, "task functions cannot have `self` receiver")
-                    .to_compile_error()
-                    .into();
-            }
-            FnArg::Typed(pat_type) => {
-                fargs.push(arg.clone());
-                if let Pat::Ident(pat_id) = &*pat_type.pat {
-                    full_args.push(pat_id.ident.clone());
-                } else {
-                    return syn::Error::new_spanned(pat_type, "argument must be a simple identifier")
-                        .to_compile_error()
-                        .into();
-                }
+        if let FnArg::Typed(pat_type) = arg {
+            fargs.push(arg.clone());
+            if let Pat::Ident(pat_id) = &*pat_type.pat {
+                full_args.push(pat_id.ident.clone());
             }
         }
     }
 
-    // 5. 修改原函数，重命名为内部名，并移除可见性修饰符（变成私有）
+    // 5. 复制原函数并修改为私有内部函数
     let mut task_inner = f.clone();
     task_inner.sig.ident = task_inner_ident.clone();
     task_inner.vis = syn::Visibility::Inherited;
 
-    // 6. 路径定义
+    // 6. 定义路径
     let executor_path = quote!(::uefi_async);
-
-    // 7. 生成外部包装函数主体
     let visibility = &f.vis;
-    let executor_result_path = quote!(Result<#executor_path::SpawnToken, #executor_path::SpawnError>);
 
+    // 7. 生成代码
     let result = quote! {
-        // 内部真实的异步函数
+        // A. 原始异步逻辑，改名后隐藏
         #[doc(hidden)]
         #task_inner
 
-        // 用户调用的同步启动函数
-        #visibility fn #task_ident(#(#fargs),*) -> #executor_result_path {
+        // B. 用户调用的入口函数
+        #visibility fn #task_ident(#(#fargs),*) -> Result<#executor_path::SpawnToken, #executor_path::SpawnError> {
             const POOL_SIZE: usize = #pool_size;
 
-            // 这里的辅助函数用来推导类型并转换指针
-            const fn __task_pool_get<F, Args, Fut>(_: F) -> &'static #executor_path::TaskPool<Fut, POOL_SIZE>
-            where
-                F: #executor_path::TaskFn<Args, Fut = Fut>,
-                Fut: ::core::future::Future<Output = ()> + 'static + ::core::marker::Send + ::core::marker::Sync,
-            {
-                unsafe { &*(POOL.as_ptr() as *const #executor_path::TaskPool<Fut, POOL_SIZE>) }
-            }
-
-            // 静态内存池定义
-            static POOL: #executor_path::TaskPoolHolder<
+            // 声明静态内存布局（预留空间）
+            // 利用 task_pool_size 计算该异步函数对应的 Pool 所需字节数
+            static POOL_STORAGE: #executor_path::TaskPoolLayout<
                 {#executor_path::task_pool_size::<_, _, _, POOL_SIZE>(#task_inner_ident)},
                 {#executor_path::task_pool_align::<_, _, _, POOL_SIZE>(#task_inner_ident)},
-            > = unsafe {
-                ::core::mem::transmute(#executor_path::task_pool_new::<_, _, _, POOL_SIZE>(#task_inner_ident))
-            };
+            > = #executor_path::TaskPoolLayout([0u8; {#executor_path::task_pool_size::<_, _, _, POOL_SIZE>(#task_inner_ident)}]);
 
-            // 真正进行 Spawn 的动作
-            unsafe {
-                __task_pool_get(#task_inner_ident).spawn(move || #task_inner_ident(#(#full_args),*))
+            // 内部类型恢复函数
+            // 将字节数组强转为带具体 Future 类型的 TaskPool 引用
+            fn __get_typed_pool<F, Args, Fut>(_: F) -> &'static #executor_path::TaskPool<Fut, POOL_SIZE>
+            where
+                F: #executor_path::TaskFn<Args, Fut = Fut>,
+                Fut: ::core::future::Future<Output = ()> + 'static + Send + Sync,
+            {
+                unsafe {
+                    &*(POOL_STORAGE.as_ptr() as *const #executor_path::TaskPool<Fut, POOL_SIZE>)
+                }
             }
+
+            // 获取池子引用
+            let pool = __get_typed_pool(#task_inner_ident);
+
+            // 执行分配逻辑
+            // 构造闭包，移动参数，并启动任务
+            // pool.spawn(move || #task_inner_ident(#(#full_args),*))
+            todo!()
         }
     };
 
