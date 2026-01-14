@@ -42,6 +42,8 @@ use core::sync::atomic::{AtomicPtr, AtomicU32, AtomicU64};
 use core::sync::atomic::Ordering::{Acquire, Relaxed, Release};
 
 use crate::st3::{pack, unpack, StealError};
+use crate::task::{SLOT_EMPTY, SLOT_OCCUPIED};
+use crate::TaskPool;
 
 /// A double-ended LIFO queue.
 ///
@@ -76,6 +78,12 @@ pub struct Queue<const N: usize> {
 #[derive(Debug)]
 #[repr(C, align(128))]
 pub struct Ptr<const N: usize> ([AtomicPtr<()>; N]);
+impl<const N: usize> Ptr<N> {
+    pub const fn new() -> Self {
+        const EMPTY_PTR: AtomicPtr<()> = AtomicPtr::new(core::ptr::null_mut());
+        Self([EMPTY_PTR; N])
+    }
+}
 
 ///
 #[derive(Debug)]
@@ -93,6 +101,18 @@ pub struct StealerData {
 impl<const N: usize> Queue<N> {
     const _CHECK_N: () = assert!(N.is_power_of_two(), "N must be a power of two");
     const MASK: u32 = (N - 1) as u32;
+
+    /// 真正的静态构造函数
+    pub const fn new() -> Self {
+        Self {
+            push_count: AtomicU32::new(0),
+            stealer_data: StealerData {
+                pop_count_and_head: AtomicU64::new(0),
+                head: AtomicU32::new(0),
+            },
+            buffer: Ptr::new(),
+        }
+    }
 
     /// Read an item at the given position.
     ///
@@ -483,6 +503,37 @@ impl<const N: usize> Worker<N> {
             current: old_head,
             end: new_head,
         })
+    }
+
+    /// 将具体的 Future 包装成任务并推入当前 Worker
+    pub fn spawn<F>(&self, pool: &TaskPool<F, N>, fut: F) -> Result<(), &'static str>
+    where F: core::future::Future<Output = ()> + 'static + Send + Sync
+    {
+        // 在 Pool 中找空位
+        for slot in pool.0.iter() {
+            if slot.occupied.compare_exchange(
+                SLOT_EMPTY, SLOT_OCCUPIED, Acquire, Relaxed
+            ).is_ok() {
+                unsafe {
+                    // 写入数据
+                    core::ptr::write((*slot.future.get()).as_mut_ptr(), fut);
+
+                    // 混淆指针并推入队列
+                    let mut fn_ptr = slot.header as usize;
+                    #[cfg(feature = "safe")]
+                    { fn_ptr ^= POINTER_COOKIE.load(Ordering::Relaxed); }
+
+                    // 这里注意：你的 TaskSlot 布局必须保证第一个字段是这个混淆后的值
+                    // 或者是修改 TaskSlot 结构使其支持这种存储
+
+                    if self.push(slot as *const _ as *mut ()).is_err() {
+                        return Err("Queue full");
+                    }
+                    return Ok(());
+                }
+            }
+        }
+        Err("No empty slot")
     }
 
     /// 仅在需要手动释放队列中所有指针指向的内存时使用

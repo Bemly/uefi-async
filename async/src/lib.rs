@@ -1,4 +1,4 @@
-#![warn(unreachable_pub)]
+// #![warn(unreachable_pub)]
 #![no_main]
 #![no_std]
 

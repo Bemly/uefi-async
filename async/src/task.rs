@@ -7,13 +7,17 @@ use core::pin::Pin;
 use core::sync::atomic::{AtomicU8, Ordering};
 use core::task::{Context, Poll, Waker};
 
-const SLOT_EMPTY: u8 = 0;
-const SLOT_OCCUPIED: u8 = 1;
+#[cfg(feature = "safe")]
+fn safe_challenge() {}
+
+pub const SLOT_EMPTY: u8 = 0;
+pub const SLOT_OCCUPIED: u8 = 1;
+pub type TaskTypeFn = fn(*mut (), &Waker) -> Poll<()>;
 
 #[repr(C, align(128))]
 pub struct TaskSlot<F: Future<Output = ()>> {
     // 1. 公共头：偷取者最先看这里
-    pub header: fn(*mut (), &Waker) -> Poll<()>,
+    pub header: TaskTypeFn,
 
     // 2. 状态控制：建议放在最前面，与 header 共享第一个 Cache Line
     pub occupied: AtomicU8,
@@ -26,11 +30,13 @@ pub struct TaskSlot<F: Future<Output = ()>> {
     pub future: UnsafeCell<MaybeUninit<F>>,
 }
 impl<F: Future<Output = ()> + 'static + Send + Sync> TaskSlot<F> {
-    // 黑魔法
-    const NEW: Self = Self::new();
+    const NEW: Self = Self::new(); // 黑魔法：绕过rust Copy Clone传染判定
     pub const fn new() -> Self {
+        #[cfg(feature = "safe")]
+        safe_challenge();
+
         Self {
-            header: Self::poll_wrapper, // 魔法就在这里：自动绑定了当前的 F
+            header: Self::poll_wrapper, // 魔法：自动绑定了当前的 F
             occupied: AtomicU8::new(SLOT_EMPTY), // 初始化为空闲状态 0
             task_id: 0,
             context_ptr: core::ptr::null(),
@@ -67,7 +73,7 @@ unsafe impl<F: Future<Output = ()> + 'static> Sync for TaskSlot<F> {}
 unsafe impl<F: Future<Output = ()> + 'static> Send for TaskSlot<F> {}
 
 #[repr(C, align(128))]
-pub struct TaskPool<F: Future<Output = ()> + 'static + Send + Sync, const N: usize> ([TaskSlot<F>; N]);
+pub struct TaskPool<F: Future<Output = ()> + 'static + Send + Sync, const N: usize> (pub [TaskSlot<F>; N]);
 impl<F: Future<Output = ()> + 'static + Send + Sync, const N: usize> TaskPool<F, N> {
     pub const fn new() -> Self { Self([TaskSlot::<F>::NEW; N]) }
 }
