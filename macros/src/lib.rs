@@ -1,10 +1,12 @@
+#![warn(unreachable_pub)]
+
 use proc_macro::TokenStream;
-use quote::{format_ident, quote, ToTokens};
+use quote::{format_ident, quote};
 use syn::{parse_macro_input, parse_quote, Error, FnArg, Item, ItemFn, ItemMod, Pat, Token};
 use syn::parse::{Parse, ParseStream};
 use syn::spanned::Spanned;
 
-fn nya_attr_checker(attr: TokenStream) -> bool {
+fn _nya_attr_checker(attr: TokenStream) -> bool {
     // Lexical matching
     let mut iter = attr.clone().into_iter();
     match iter.next() {
@@ -158,7 +160,7 @@ impl Parse for TaskArgs {
         if !input.is_empty() {
             let id: syn::Ident = input.parse()?;
             if id != "pool_size" {
-                return Err(syn::Error::new(id.span(), "expected `pool_size`"));
+                return Err(Error::new(id.span(), "expected `pool_size`"));
             }
             input.parse::<Token![=]>()?;
             let lit: syn::LitInt = input.parse()?;
@@ -175,11 +177,11 @@ pub fn task(attr: TokenStream, item: TokenStream) -> TokenStream {
     let pool_size = args.pool_size;
 
     // 2. 解析函数
-    let mut f = parse_macro_input!(item as ItemFn);
+    let f = parse_macro_input!(item as ItemFn);
 
     // 必须是 async
     if f.sig.asyncness.is_none() {
-        return syn::Error::new_spanned(&f.sig, "task functions must be async")
+        return Error::new_spanned(&f.sig, "task functions must be async")
             .to_compile_error()
             .into();
     }

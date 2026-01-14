@@ -1,9 +1,10 @@
+#![warn(unreachable_pub)]
 #![no_main]
 #![no_std]
 
 extern crate alloc;
 
-mod st3;
+pub mod st3;
 mod executor;
 mod task;
 

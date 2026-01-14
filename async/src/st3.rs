@@ -1,4 +1,4 @@
-//! # St³ — Stealing Static Stack
+//! # St³ — Stealing Static Stack (Patch!)
 //!
 //! Very fast lock-free, bounded, work-stealing queue with FIFO stealing and
 //! LIFO or FIFO semantic for the worker thread.

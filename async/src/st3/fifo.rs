@@ -70,7 +70,7 @@ pub struct Queue<T, const N: usize> {
     /// Positions of the head as seen by the worker (most significant bits) and
     /// as seen by a stealer (least significant bits).
     /// 组 1: Worker/Stealer 共同竞争的头部区 (128B)
-    pub heads: Align<AtomicU64>,
+    heads: Align<AtomicU64>,
 
     /// 组 2: 数据区 (Buffer)
     /// FIFO 模式下，Buffer 同样充当隔离带
@@ -80,11 +80,11 @@ pub struct Queue<T, const N: usize> {
     /// 组 3: 尾部修改区 (128B)
     /// 只有 Worker 频繁修改 tail
     /// Position of the tail.
-    pub tail: Align<AtomicU32>,
+    tail: Align<AtomicU32>,
 }
 
 impl<T, const N: usize> Queue<T, N> {
-    const CHECK_N: () = assert!(N.is_power_of_two(), "N must be a power of two");
+    const _CHECK_N: () = assert!(N.is_power_of_two(), "N must be a power of two");
     const MASK: u32 = (N - 1) as u32;
 
     /// Read an item at the given position.
@@ -211,7 +211,7 @@ impl<T, const N: usize> Drop for Queue<T, N> {
 /// Handle for single-threaded FIFO push and pop operations.
 #[derive(Debug)]
 pub struct Worker<T: 'static, const N: usize> {
-    pub queue: &'static Queue<T, N>,
+    queue: &'static Queue<T, N>,
 }
 
 impl<T, const N: usize> Worker<T, N> {
@@ -235,9 +235,7 @@ impl<T, const N: usize> Worker<T, N> {
     /// An arbitrary number of `Stealer` handles can be created, either using
     /// this method or cloning an existing `Stealer` handle.
     pub fn stealer(&self) -> Stealer<T, N> {
-        Stealer {
-            queue: self.queue.clone(),
-        }
+        Stealer { queue: self.queue, }
     }
 
     /// Creates a reference to a `Stealer` handle associated to this `Worker`.
@@ -479,7 +477,7 @@ unsafe impl<'a, T: Send, const N: usize> Sync for Drain<'a, T, N> {}
 #[derive(Debug)]
 #[repr(transparent)]
 pub struct Stealer<T: 'static, const N: usize> {
-    pub queue: &'static Queue<T, N>,
+    queue: &'static Queue<T, N>,
 }
 
 impl<T, const N: usize> Stealer<T, N> {

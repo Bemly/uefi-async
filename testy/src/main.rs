@@ -12,9 +12,9 @@ use uefi_async_macros::task;
 
 // #[ヽ('ε')]
 // mod example_app {
-//     async fn master_setup() {}
-//     async fn agent_setup() {}
-//     async fn agent_main() {}
+//     fn master_setup() {}
+//     fn agent_setup() {}
+//     fn agent_main() {}
 //     fn agent_idle() {}
 //     fn on_panic() {}
 //     fn on_error() {}
