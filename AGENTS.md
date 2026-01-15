@@ -1,50 +1,49 @@
-# Agent Instruction: Zero-Alloc Multi-Core Task-Stealing Executor (UEFI)
+# AGENTS.md: Symmetric Multi-Core Zero-Alloc Async Executor
 
-## 1. Project Vision
-Build a `no_std`, 0-allocation, high-performance asynchronous executor for UEFI environments. The goal is to provide an "implicit" async experience where users can write standard `async/await` code that "infects" the system, automatically distributing tasks across multiple CPU cores via work-stealing.
+## 1. System Overview
+A symmetric, no-std, zero-allocation asynchronous executor for UEFI. It uses a "Shadow Header" pattern with bit-packed control flags to support Poll-only, Interrupt-only, and Hybrid scheduling strategies with O(1) complexity.
 
-## 2. Core Architectural Principles
-- **Zero Allocation:** No `alloc` crate. All task memory is statically allocated at compile-time or via fixed-size pre-allocated buffers.
-- **Intrusive Task Nodes:** Task states (Future + Metadata) are stored in `TaskNode` structures that contain their own linked-list pointers.
-- **Work-Stealing:** Every core (BSP and APs) runs a local executor. If a local queue is empty, the core attempts to "steal" a `TaskNode` from another core's queue using atomic operations.
-- **Preemptive-Like Cooperation:** Implement a "budget" or "timer" based yield mechanism using macros to prevent long-running async tasks (like 3D rendering) from starving I/O (like keyboard/mouse).
+## 2. Memory Layout & Data Structures
 
-## 3. Data Structure Specifications
+### A. TaskHeader (The Common Interface)
+- **Constraint**: `#[repr(C)]` for stable memory offsets.
+- **Fields**:
+    1. `poll_handle: TaskTypeFn` (Offset 0): Address of the concrete `poll_wrapper<F>`.
+    2. `control: AtomicU8` (Offset 8): Bit-packed field.
+        - **Bits 0-1**: `WakePolicy` (00: PollOnly, 01: InterruptOnly, 10: Hybrid).
+        - **Bit 7**: `WAKE_BIT` (0: Sleeping, 1: Pending/Waked).
+    3. `occupied: AtomicU8` (Offset 9): Lifecycle state (0: EMPTY, 1: OCCUPIED).
 
-### 3.1 TaskNode<F>
-Each task must be wrapped in a `TaskNode` with the following memory layout:
-- `state`: `AtomicUsize` (States: Idle, Queued, Running, Stealing, Completed).
-- `future`: `StaticCell<F>` (The generated state machine).
-- `pointers`: `AtomicPtr` for `prev` and `next` to form intrusive lists.
-- `waker_context`: Metadata to track which core currently "owns" the task.
+### B. TaskSlot<F> (The Concrete Task)
+- **Alignment**: `align(128)` to prevent False Sharing between cores.
+- **Composition**: Contains a `TaskHeader` and an `UnsafeCell<MaybeUninit<F>>`.
+- **Symmetry**: Any core can safely spawn any `Future` into any `TaskSlot`.
 
-### 3.2 Global & Local Queues
-- **Local Queue:** Lock-free SPSC (Single-Producer Single-Consumer) or similar for high-speed local access.
-- **Global Injector:** A fallback queue for newly spawned tasks.
-- **Steal Mechanism:** Use `compare_exchange` (CAS) on the `TaskNode.state` to ensure only one core can transition a task from `Queued` to `Running`.
+## 3. Wake-up Logic (Bit-Level Optimization)
 
-## 4. Implementation Requirements for AI Assistant
+### A. Atomic Wake Operation (ISR)
+1. ISR receives a raw `*mut ()` (pointing to the `TaskHeader`).
+2. Performs `header.control.fetch_or(0x80, Ordering::Release)`.
+3. If the returned old value has Bit 7 == 0, the ISR triggers `schedule_task(ptr)` to re-queue the task. This ensures **Hardware-level Deduplication**.
 
-### 4.1 Memory Safety & Pinning
-- All tasks must be `Pinned` because they are stored in static memory and cannot be moved once execution starts.
-- Use `StaticCell` and `Atomic` operations to bypass the borrow checker safely in a multi-core context.
+### B. Scheduling Policies
+- **PollOnly (00)**: Executor always polls the task upon acquisition.
+- **InterruptOnly (01)**: `poll_wrapper` only executes `poll()` if Bit 7 was set.
+- **Hybrid (10)**: Task is polled every cycle, but interrupts can force immediate re-queuing for lower latency.
 
-### 4.2 Multi-Core Synchronization
-- Implement the `Waker` trait by wrapping a pointer to the `TaskNode`.
-- `wake()` must be multi-core safe: it should re-insert the task into a ready-queue (local or global) and potentially signal a CPU core via IPI (Inter-Processor Interrupt) if the core is halted.
+## 4. Execution Workflow
 
-### 4.3 UEFI Integration
-- Bridge UEFI Events to Rust `Wakers`.
-- Wrap `EFI_SIMPLE_TEXT_INPUT_PROTOCOL` and `EFI_GRAPHICS_OUTPUT_PROTOCOL` into `Stream` and `Future` traits.
+### A. Executor::run_step() (The Blind Mover)
+- **Fetch**: Pops from local `Worker` or steals from peer `Stealers`.
+- **Dispatch**: Directly invokes `(ptr.read_as_fn())(ptr, waker)`.
+- **Agnoticism**: The executor logic is policy-agnostic; it simply jumps to the handler.
 
-## 5. Development Roadmap for Agent
-1. **Module 1: Atomic State Machine.** Define the `TaskState` and atomic transition logic.
-2. **Module 2: Intrusive List.** Implement the 0-alloc linked list for task management.
-3. **Module 3: The Executor Loop.** Implement the `poll` loop with work-stealing logic.
-4. **Module 4: Macro System.** Create `spawn_static!` and `#[entry]` macros to hide executor complexity.
-5. **Module 5: Yielding Macro.** Create a macro to inject `yield_now().await` into heavy loops based on a counter or `RDTSC`.
+### B. poll_wrapper<F>() (The Logic Controller)
+1. **Unpack**: Casts `*mut ()` to `&TaskSlot<F>`, then `fetch_and(!0x80)` on `control` to read policy and clear the wake bit.
+2. **Policy Enforcement**: Decides whether to poll the `future` based on policy and wake bit status.
+3. **Lifecycle**: If `Poll::Ready`, calls `drop_in_place` and sets `occupied` to `EMPTY` (Release).
 
-## 6. Constraints
-- Strict `no_std`.
-- No `Box`, `Vec`, or `Arc`. Use `StaticCell` or raw pointers where necessary.
-- Target Architecture: `x86_64-unknown-uefi`.
+## 5. Multi-Core Synergy
+- **Symmetric SMP**: BSP and APs are identical. All cores participate in spawning, stealing, and execution.
+- **Load Balancing**: Uses the ST3 lock-free algorithm (`steal_and_pop`) for efficient task distribution.
+- **Zero-Alloc**: Entirely static-memory based, ensuring safety for UEFI Boot and Runtime services.

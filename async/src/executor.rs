@@ -1,7 +1,12 @@
 use crate::st3::lifo::{Queue, Stealer, Worker};
-use crate::task::TaskTypeFn;
+use crate::task::{TaskHeader, TaskTypeFn, SLOT_EMPTY, SLOT_OCCUPIED};
 use core::mem::transmute;
-use core::task::Waker;
+use core::pin::Pin;
+use core::ptr;
+use core::sync::atomic::Ordering;
+use core::task::{Context, Poll, Waker};
+use crate::{TaskPool, TaskSlot};
+use crate::waker::WakePolicy;
 
 // #[cfg(feature = "safe")]
 // use core::sync::atomic::AtomicUsize;
@@ -26,32 +31,36 @@ fn safe_challenge() {
     let poll_fn: fn(*mut (), &Waker) -> Poll<()> = core::mem::transmute(original_fn_ptr);
     (poll_fn)(ptr, waker);
 }
-
 pub struct Executor<const N: usize> {
+    /// 本地核心的 Worker
     worker: Worker<N>,
+    /// 其他核心的 Stealers
     stealers: &'static [Stealer<N>],
 }
 
 impl<const N: usize> Executor<N> {
-    pub fn run_step(&self, waker: &Waker) -> bool {
-        // 1. 尝试从本地队列获取任务
+    pub const fn new(worker: Worker<N>, stealers: &'static [Stealer<N>]) -> Self {
+        Self { worker, stealers }
+    }
+
+    pub fn run_step(&self, waker: &core::task::Waker) -> bool {
+        // 1. & 2. 获取任务指针 (优先本地 LIFO，其次跨核窃取 FIFO)
         let task_ptr = self.worker.pop().or_else(|| {
-            // 2. 本地没有，尝试从其他核心偷取
-            for stealer in self.stealers {
-                if let Ok((ptr, _)) = stealer.steal_and_pop(
-                    &self.worker,
-                    |n| (n + 1) / 2 // 偷取一半
-                ) { return Some(ptr); }
-            }
-            None
+            self.stealers.iter().find_map(|s| {
+                // steal_and_pop 直接返回一个可用的任务，同时将其余任务转移到本地
+                s.steal_and_pop(&self.worker, |n| (n + 1) / 2).ok().map(|(ptr, _)| ptr)
+            })
         });
 
+        // 3. 执行任务
         if let Some(ptr) = task_ptr {
-            #[cfg(feature = "safe")]
-            safe_challenge();
             unsafe {
-                let poll_fn: TaskTypeFn = transmute(*(ptr as *const usize));
-                let _ = poll_fn(ptr, waker);
+                // 此时 ptr 指向 TaskSlot<F> 的开头，即 TaskHeader 的开头
+                let header = &*(ptr as *const TaskHeader);
+
+                // 直接调用 poll_handle
+                // 内部逻辑（WakePolicy 判定、类型还原、Poll 执行）全部封装在 poll_wrapper 中
+                let _ = (header.poll_handle)(ptr, waker);
             }
             return true;
         }
@@ -59,53 +68,121 @@ impl<const N: usize> Executor<N> {
     }
 }
 
+impl<F: Future<Output = ()> + 'static + Send + Sync> TaskSlot<F> {
+    /// 翻译被抹掉的类型
+    pub fn poll_wrapper(ptr: *mut (), waker: &Waker) -> Poll<()> {
+        unsafe {
+            let slot = &*(ptr as *const TaskSlot<F>);
 
+            // 1. 原子获取并清除唤醒位
+            let prev_val = slot.header.control.fetch_and(!WakePolicy::WAKE_BIT, Ordering::Acquire);
 
+            // 2. 使用 WakePolicy 内部逻辑解包并判定
+            let (policy, is_waked) = WakePolicy::unpack(prev_val);
 
+            if !policy.should_poll(is_waked) {
+                // InterruptOnly 且未被唤醒的情况
+                return Poll::Pending;
+            }
 
+            // 3. 执行真正的 Future 推进
+            let future_mut = &mut *(*slot.future.get()).as_mut_ptr();
+            let res = Pin::new_unchecked(&mut *future_mut).poll(&mut Context::from_waker(waker));
 
+            if res.is_ready() {
+                ptr::drop_in_place(future_mut);
+                slot.header.occupied.store(SLOT_EMPTY, Ordering::Release);
+            }
 
-// 假设我们支持 4 个核心，每个核心队列大小为 256
+            res
+        }
+    }
+
+}
+
 pub const MAX_CORES: usize = 4;
 pub const QUEUE_SIZE: usize = 256;
-static GLOBAL_QUEUES: [Queue<QUEUE_SIZE>; MAX_CORES] = [
+
+// 1. 全局原始队列池
+pub static GLOBAL_QUEUES: [Queue<QUEUE_SIZE>; MAX_CORES] = [
     Queue::new(), Queue::new(), Queue::new(), Queue::new()
 ];
 
-pub fn init_executor(core_id: usize) -> Executor<QUEUE_SIZE> {
-    assert!(core_id < MAX_CORES, "Core ID out of range");
-
-    Executor {
-        worker: Worker::new(&GLOBAL_QUEUES[core_id]),
-        stealers: collect_static_stealers(core_id),
-    }
-}
-
-// 1. 定义 Stealer 存储池：每个核心拥有一个能够存放 (MAX_CORES - 1) 个 Stealer 的数组
-// 这里我们直接初始化，编译器会在编译时计算好偏移量
+// 2. 全局 Stealer 矩阵 (排除自己)
 static STEALER_POOL: [[Stealer<QUEUE_SIZE>; MAX_CORES - 1]; MAX_CORES] = {
     let mut pool = [[Stealer { queue: &GLOBAL_QUEUES[0] }; MAX_CORES - 1]; MAX_CORES];
-
-    let mut core_i = 0;
-    while core_i < MAX_CORES {
-        let mut stealer_j = 0;
-        let mut target_core = 0;
-        while target_core < MAX_CORES {
-            if core_i != target_core {
-                // 这里的 Stealer 只是持有静态 Queue 的引用，Copy 成本极低
-                pool[core_i][stealer_j] = Stealer { queue: &GLOBAL_QUEUES[target_core] };
-                stealer_j += 1;
+    let mut i = 0;
+    while i < MAX_CORES {
+        let mut j = 0;
+        let mut target = 0;
+        while target < MAX_CORES {
+            if i != target {
+                pool[i][j] = Stealer { queue: &GLOBAL_QUEUES[target] };
+                j += 1;
             }
-            target_core += 1;
+            target += 1;
         }
-        core_i += 1;
+        i += 1;
     }
     pool
 };
 
-/// 核心函数：根据 core_id 映射到对应的静态切片
-pub fn collect_static_stealers(core_id: usize) -> &'static [Stealer<QUEUE_SIZE>] {
-    &STEALER_POOL[core_id]
+/// 每个 CPU 核心启动时调用的初始化函数
+pub fn init_executor(core_id: usize) -> Executor<QUEUE_SIZE> {
+    let worker = Worker::new(&GLOBAL_QUEUES[core_id]);
+    let stealers = &STEALER_POOL[core_id];
+    Executor::new(worker, stealers)
 }
 
+/// 将任务指针重新调度到任意可用的全局队列中
+/// 由 Waker 调用
+pub fn schedule_task(ptr: *mut ()) {
+    // 简单策略：遍历所有核心的队列，尝试推入
+    // 实际生产中可能优先推入当前核心或随机选择
+    for q in GLOBAL_QUEUES.iter() {
+        let worker = Worker::new(q);
+        if worker.push(ptr).is_ok() {
+            return;
+        }
+    }
+    // 如果所有队列都满了，这是一个严重问题（系统过载）
+    // 在这个简易实现中，我们只能丢弃这次唤醒（可能会导致任务饿死），或者在这里自旋等待
+}
 
+impl<const N: usize> Worker<N> {
+    /// 从指定的 TaskPool 中分配槽位并推入队列
+    pub fn spawn_task<F, const POOL_N: usize>(
+        &self,
+        pool: &'static TaskPool<F, POOL_N>,
+        fut: F
+    ) -> Result<(), F>
+    where F: Future<Output = ()> + 'static + Send + Sync
+    {
+        // 1. 寻找空闲槽位
+        for slot in pool.0.iter() {
+            // 尝试锁定槽位
+            if slot.header.occupied.compare_exchange(
+                SLOT_EMPTY, SLOT_OCCUPIED, Ordering::Acquire, Ordering::Relaxed
+            ).is_ok() {
+                unsafe {
+                    // 2. 初始化 Future 内容
+                    let future_ptr = (*slot.future.get()).as_mut_ptr();
+                    core::ptr::write(future_ptr, fut);
+
+                    // 3. 将槽位地址推入 LIFO 队列
+                    // 如果队列满了，我们需要退还槽位所有权
+                    let ptr = slot as *const TaskSlot<F> as *mut ();
+                    if let Err(_) = self.push(ptr) {
+                        ptr::drop_in_place(future_ptr);
+                        slot.header.occupied.store(SLOT_EMPTY, Ordering::Release);
+                        // 这里比较遗憾，Future 已经被丢弃了，无法还给调用者原来的 F
+                        // 但在嵌入式环境下，通常意味着设计容量不足
+                        return Err(unsafe { core::mem::zeroed() });
+                    }
+                }
+                return Ok(());
+            }
+        }
+        Err(fut)
+    }
+}

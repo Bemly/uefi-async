@@ -4,11 +4,10 @@
 
 extern crate alloc;
 
-pub mod st3;
-mod executor;
+mod st3;
+pub mod executor;
 mod task;
-
-
+mod waker;
 
 pub use crate::task::{
     TaskSlot, TaskPool, TaskPoolLayout, TaskFn, task_pool_size, task_pool_align, task_pool_new
