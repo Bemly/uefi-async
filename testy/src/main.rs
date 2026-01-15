@@ -5,13 +5,14 @@ use core::ffi::c_void;
 use core::mem::transmute;
 use core::ptr;
 use core::ptr::addr_of_mut;
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
 use core::task::{RawWaker, Waker};
 use core::time::Duration;
 use uefi::boot::{create_event, get_handle_for_protocol, open_protocol_exclusive, stall, EventType, Tpl};
 use uefi::proto::pi::mp::MpServices;
 use uefi::{entry, println, Status};
 use uefi_async::executor::init_executor;
+use uefi_async::sleep::sleep_ms;
 use uefi_async::st3::lifo::Worker;
 use uefi_async::task::{SafeFuture, TaskCapture, TaskFn, TaskPool, TaskPoolLayout};
 use uefi_async::waker::VTABLE;
@@ -56,6 +57,20 @@ impl SpinLock {
 // 定义一个全局控制台锁
 static PRINT_LOCK: SpinLock = SpinLock::new();
 
+#[derive(Copy, Clone)]
+pub struct SendPtr<T>(pub *const T);
+
+// 手动标记为 Send 和 Sync
+// 安全性声明：在 UEFI 环境下，协议指针是全局唯一的，跨核访问是物理安全的
+unsafe impl<T> Send for SendPtr<T> {}
+unsafe impl<T> Sync for SendPtr<T> {}
+
+impl<T> SendPtr<T> {
+    pub unsafe fn as_ref(&self) -> &T {
+        &*self.0
+    }
+}
+
 
 #[repr(C)]
 struct Context<'bemly_> {
@@ -73,7 +88,7 @@ extern "efiapi" fn process(arg: *mut c_void) {
 
     let mut worker = &mut executor.worker;
 
-    www(&mut worker, core_id);
+    www(&mut worker, core_id, ctx.mp);
 
     let waker = unsafe { Waker::from_raw(RawWaker::new(ptr::null(), &VTABLE)) };
     // 3. 进入执行主循环
@@ -87,46 +102,42 @@ extern "efiapi" fn process(arg: *mut c_void) {
 }
 
 
+static RANG: AtomicUsize = AtomicUsize::new(0);
 
+fn __www_task(a: usize, core_id: usize, mp_ptr: SendPtr<MpServices>) -> impl Future<Output = ()> {
+    async fn __www_task_inner_function(a: usize, core_id: usize, mp_ptr: SendPtr<MpServices>) {
+        let mut time = 1;
+        let mp = unsafe { mp_ptr.as_ref() };
 
-fn __www_task(a: usize, core_id: usize) -> impl Future<Output = ()> {
-    async fn __www_task_inner_function(a: usize, core_id: usize) {
         loop {
-            // 访问共享资源前加锁
+            if RANG.load(Ordering::SeqCst) == core_id {
+                continue;
+            }
             PRINT_LOCK.lock();
-            // 现在的 UEFI 打印会被保护起来
-            println!("[Core {}] Value: {}", core_id, a);
+            let current_id = mp.who_am_i().unwrap_or(core_id);
+            println!("[Core {}] Real ID: {} | val: {}", core_id, current_id, a);
+            RANG.store(current_id, Ordering::SeqCst);
             PRINT_LOCK.unlock();
 
-            stall(Duration::from_secs(1));
+            sleep_ms(1000).await;
+            // stall(Duration::from_secs(1))
         }
     }
-    __www_task_inner_function(a, core_id)
+    __www_task_inner_function(a, core_id, mp_ptr)
 }
-fn www(worker: &Worker<256>, core_id: usize) {
+fn www(worker: &Worker<256>, core_id: usize, mp: &MpServices) {
     const POOL_SIZE: usize = 4;
-
-    // 1. 静态分配空间，只开辟内存，不进行危险的编译期初始化
     static POOL: TaskPoolLayout<{ TaskCapture::<_, _>::size::<POOL_SIZE>(__www_task) }> = TaskPoolLayout::new();
-    // 2. 使用原子标志位确保多核环境下只初始化一次
     static INIT: AtomicBool = AtomicBool::new(false);
-
     let pool_ptr = POOL.0.get() as *mut TaskPool<_, POOL_SIZE>;
-
-    // 3. 运行时初始化（仅限第一次）
     if INIT.compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed).is_ok() {
-        unsafe {
-            // 这里推导 Fut 的具体类型
-            core::ptr::write(pool_ptr, TaskPool::new());
-        }
+        unsafe { core::ptr::write(pool_ptr, TaskPool::new()); }
     }
 
     unsafe {
         let pool = &*pool_ptr;
-        // 4. 锁定类型并 spawn
-        // 使用同一个变量确保类型一致性
         let task_gen = __www_task;
-        let _ = worker.spawn_task(pool, task_gen(25, core_id));
+        let _ = worker.spawn_task(pool, task_gen(20, core_id, SendPtr(mp as *const _)));
     }
 }
 
