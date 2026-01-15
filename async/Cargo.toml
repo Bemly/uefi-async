@@ -8,5 +8,8 @@ default = []
 safe = []
 
 [dependencies]
+embassy-executor = "0.9.1"
+st3 = "0.4.1"
+static_cell = "2.1.1"
 uefi = { version = "0.36.1", features = ["logger", "alloc", "global_allocator", "panic_handler"] }
 uefi-async-macros = { path = "../macros" }

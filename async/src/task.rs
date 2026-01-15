@@ -5,6 +5,7 @@ use core::cell::UnsafeCell;
 use core::mem::MaybeUninit;
 use core::sync::atomic::AtomicU8;
 use core::task::{Poll, Waker};
+use crate::util::UninitCell;
 use crate::waker::WakePolicy;
 
 #[cfg(feature = "safe")]
@@ -26,7 +27,7 @@ pub struct TaskHeader {
 #[repr(C, align(128))]
 pub struct TaskSlot<F: Future<Output = ()>> {
     pub header: TaskHeader,
-    pub future: UnsafeCell<MaybeUninit<F>>,
+    pub future: UninitCell<F>,
 }
 impl<F: Future<Output = ()> + 'static + Send + Sync> TaskSlot<F> {
     const NEW: Self = Self::new(); // 黑魔法：绕过rust Copy Clone传染判定
@@ -40,7 +41,7 @@ impl<F: Future<Output = ()> + 'static + Send + Sync> TaskSlot<F> {
                 control: AtomicU8::new(0),
                 occupied: AtomicU8::new(SLOT_EMPTY),    // 初始化为空闲状态 0
             },
-            future: UnsafeCell::new(MaybeUninit::uninit()),
+            future: UninitCell::uninit(),
         }
     }
 }

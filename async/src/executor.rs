@@ -1,12 +1,13 @@
 use crate::st3::lifo::{Queue, Stealer, Worker};
-use crate::task::{TaskHeader, TaskTypeFn, SLOT_EMPTY, SLOT_OCCUPIED};
-use core::mem::transmute;
+use crate::task::{TaskHeader, SLOT_EMPTY, SLOT_OCCUPIED};
+use crate::waker::WakePolicy;
+use crate::{TaskPool, TaskSlot};
+use core::mem::zeroed;
 use core::pin::Pin;
 use core::ptr;
+use core::ptr::write;
 use core::sync::atomic::Ordering;
 use core::task::{Context, Poll, Waker};
-use crate::{TaskPool, TaskSlot};
-use crate::waker::WakePolicy;
 
 // #[cfg(feature = "safe")]
 // use core::sync::atomic::AtomicUsize;
@@ -86,7 +87,8 @@ impl<F: Future<Output = ()> + 'static + Send + Sync> TaskSlot<F> {
             }
 
             // 3. 执行真正的 Future 推进
-            let future_mut = &mut *(*slot.future.get()).as_mut_ptr();
+            // let future_mut = &mut *(*slot.future.get()).as_mut_ptr();
+            let future_mut = &mut *slot.future.as_mut_ptr();
             let res = Pin::new_unchecked(&mut *future_mut).poll(&mut Context::from_waker(waker));
 
             if res.is_ready() {
@@ -166,8 +168,8 @@ impl<const N: usize> Worker<N> {
             ).is_ok() {
                 unsafe {
                     // 2. 初始化 Future 内容
-                    let future_ptr = (*slot.future.get()).as_mut_ptr();
-                    core::ptr::write(future_ptr, fut);
+                    let future_ptr = &mut *slot.future.as_mut_ptr();
+                    write(future_ptr, fut);
 
                     // 3. 将槽位地址推入 LIFO 队列
                     // 如果队列满了，我们需要退还槽位所有权
@@ -177,7 +179,7 @@ impl<const N: usize> Worker<N> {
                         slot.header.occupied.store(SLOT_EMPTY, Ordering::Release);
                         // 这里比较遗憾，Future 已经被丢弃了，无法还给调用者原来的 F
                         // 但在嵌入式环境下，通常意味着设计容量不足
-                        return Err(unsafe { core::mem::zeroed() });
+                        return Err(zeroed());
                     }
                 }
                 return Ok(());
