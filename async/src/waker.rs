@@ -1,8 +1,7 @@
 use core::sync::atomic::Ordering;
 use core::task::{RawWaker, RawWakerVTable, Waker};
 use crate::executor::schedule_task;
-use crate::task::TaskHeader;
-use crate::TaskSlot;
+use crate::task::{TaskHeader, TaskSlot};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
@@ -65,8 +64,7 @@ unsafe fn wake(ptr: *const ()) {
 unsafe fn drop_waker(_ptr: *const ()) {
     // 这里的 ptr 指向静态分配的 TaskSlot，不需要我们回收内存
 }
-
-const VTABLE: RawWakerVTable = RawWakerVTable::new(
+pub const VTABLE: RawWakerVTable = RawWakerVTable::new(
     clone_waker,
     wake,
     wake,

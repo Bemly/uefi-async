@@ -1,11 +1,8 @@
 use crate::st3::lifo::{Queue, Stealer, Worker};
-use crate::task::{TaskHeader, SLOT_EMPTY, SLOT_OCCUPIED};
+use crate::task::{TaskHeader, TaskPool, TaskSlot, SLOT_EMPTY, SLOT_OCCUPIED};
 
 use crate::waker::WakePolicy;
-use crate::{TaskPool, TaskSlot};
-use core::mem::zeroed;
 use core::pin::Pin;
-use core::ptr;
 use core::ptr::write;
 use core::sync::atomic::Ordering;
 use core::task::{Context, Poll, Waker};
@@ -36,9 +33,9 @@ fn safe_challenge() {
 
 pub struct Executor<const N: usize> {
     /// 本地核心的 Worker
-    worker: Worker<N>,
+    pub worker: Worker<N>,
     /// 其他核心的 Stealers
-    stealers: &'static [Stealer<N>],
+    pub stealers: &'static [Stealer<N>],
 }
 
 impl<const N: usize> Executor<N> {
@@ -46,7 +43,7 @@ impl<const N: usize> Executor<N> {
         Self { worker, stealers }
     }
 
-    pub fn run_step(&self, waker: &core::task::Waker) -> bool {
+    pub fn run_step(&self, waker: &Waker) -> bool {
         // 1. & 2. 获取任务指针 (优先本地 LIFO，其次跨核窃取 FIFO)
         let task_ptr = self.worker.pop().or_else(|| {
             self.stealers.iter().find_map(|s| {
@@ -63,7 +60,7 @@ impl<const N: usize> Executor<N> {
 
                 // 直接调用 poll_handle
                 // 内部逻辑（WakePolicy 判定、类型还原、Poll 执行）全部封装在 poll_wrapper 中
-                // let _ = (header.poll_handle)(ptr, waker);
+                let _ = (header.poll_handle)(ptr, waker);
             }
             return true;
         }
@@ -93,7 +90,7 @@ impl<F: Future<Output = ()> + 'static + Send + Sync> TaskSlot<F> {
             let res = Pin::new_unchecked(&mut *future_mut).poll(&mut Context::from_waker(waker));
 
             if res.is_ready() {
-                ptr::drop_in_place(future_mut);
+                core::ptr::drop_in_place(future_mut);
                 slot.header.occupied.store(SLOT_EMPTY, Ordering::Release);
             }
 
@@ -176,11 +173,9 @@ impl<const N: usize> Worker<N> {
                     // 如果队列满了，我们需要退还槽位所有权
                     let ptr = slot as *const TaskSlot<F> as *mut ();
                     if let Err(_) = self.push(ptr) {
-                        ptr::drop_in_place(future_ptr);
+                        let recovered_fut = core::ptr::read(future_ptr); // 拿回所有权
                         slot.header.occupied.store(SLOT_EMPTY, Ordering::Release);
-                        // 这里比较遗憾，Future 已经被丢弃了，无法还给调用者原来的 F
-                        // 但在嵌入式环境下，通常意味着设计容量不足
-                        return Err(zeroed());
+                        return Err(recovered_fut);
                     }
                 }
                 return Ok(());

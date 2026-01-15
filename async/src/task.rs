@@ -2,6 +2,7 @@
 //! [https://github.com/embassy-rs/embassy/blob/main/embassy-executor-macros/src/macros/task.rs](https://github.com/embassy-rs/embassy/blob/main/embassy-executor-macros/src/macros/task.rs)
 
 use core::cell::UnsafeCell;
+use core::marker::PhantomData;
 use core::mem::MaybeUninit;
 use core::sync::atomic::AtomicU8;
 use core::task::{Poll, Waker};
@@ -10,25 +11,31 @@ use core::task::{Poll, Waker};
 #[cfg(feature = "safe")]
 fn safe_challenge() {}
 
+
+pub trait SafeFuture: Future<Output = ()> + 'static + Send + Sync {}
+impl<T: Future<Output = ()> + 'static + Send + Sync> SafeFuture for T {}
+
 pub const SLOT_EMPTY: u8 = 0;
 pub const SLOT_OCCUPIED: u8 = 1;
 pub type TaskTypeFn = unsafe fn(*mut (), &Waker) -> Poll<()>;
 
+#[derive(Debug)]
 #[repr(C)]
 pub struct TaskHeader {
-    // 1. 公共头：偷取者最先看这里
     pub poll_handle: TaskTypeFn,
-    // 2. 状态控制：建议放在最前面，与 header 共享第一个 Cache Line
     pub control: AtomicU8,
     pub occupied: AtomicU8,
 }
 
+#[derive(Debug)]
 #[repr(C, align(128))]
-pub struct TaskSlot<F: Future<Output = ()> + 'static + Send + Sync> {
+pub struct TaskSlot<F: SafeFuture> {
     pub header: TaskHeader,
     pub future: UnsafeCell<MaybeUninit<F>>,
 }
-impl<F: Future<Output = ()> + 'static + Send + Sync> TaskSlot<F> {
+unsafe impl<F: SafeFuture> Sync for TaskSlot<F> {}
+unsafe impl<F: SafeFuture> Send for TaskSlot<F> {}
+impl<F: SafeFuture> TaskSlot<F> {
     const NEW: Self = Self::new();
     pub const fn new() -> Self {
         #[cfg(feature = "safe")]
@@ -40,53 +47,46 @@ impl<F: Future<Output = ()> + 'static + Send + Sync> TaskSlot<F> {
                 control: AtomicU8::new(0),
                 occupied: AtomicU8::new(SLOT_EMPTY),    // 初始化为空闲状态 0
             },
-            future: UnsafeCell::new(MaybeUninit::zeroed()),
+            future: UnsafeCell::new(MaybeUninit::uninit()),
         }
     }
 }
-unsafe impl<F: Future<Output = ()> + 'static + Send + Sync> Sync for TaskSlot<F> {}
-unsafe impl<F: Future<Output = ()> + 'static + Send + Sync> Send for TaskSlot<F> {}
 
+#[derive(Debug)]
 #[repr(C, align(128))]
-pub struct TaskPool<F: Future<Output = ()> + 'static + Send + Sync, const N: usize> (pub [TaskSlot<F>; N]);
-impl<F: Future<Output = ()> + 'static + Send + Sync, const N: usize> TaskPool<F, N> {
-    pub const fn new() -> Self { Self([TaskSlot::<F>::NEW; N]) }
+pub struct TaskPool<F: SafeFuture, const N: usize> (pub [TaskSlot<F>; N]);
+impl<F: SafeFuture, const N: usize> TaskPool<F, N> {
+    pub const fn new() -> Self { Self([TaskSlot::NEW; N]) }
 }
 
+// UB
+#[derive(Debug)]
 #[repr(C, align(128))]
-pub struct TaskPoolLayout<const SIZE: usize, const ALIGN: usize> (pub UnsafeCell<[MaybeUninit<u8>; SIZE]>);
-unsafe impl<const SIZE: usize, const ALIGN: usize> Send for TaskPoolLayout<SIZE, ALIGN> {}
-unsafe impl<const SIZE: usize, const ALIGN: usize> Sync for TaskPoolLayout<SIZE, ALIGN> {}
+pub struct TaskPoolLayout<const SIZE: usize> (pub UnsafeCell<MaybeUninit<[u8; SIZE]>>);
+impl<const SIZE: usize> TaskPoolLayout<SIZE> {
+    pub const fn new() -> Self { Self(UnsafeCell::new(MaybeUninit::uninit())) }
+}
+unsafe impl<const SIZE: usize> Send for TaskPoolLayout<SIZE> {}
+unsafe impl<const SIZE: usize> Sync for TaskPoolLayout<SIZE> {}
 
-pub trait TaskFn<Args>: Copy { type Fut: Future<Output = ()> + 'static + Send + Sync; }
+pub trait TaskFn<Args>: Copy { type Fut: SafeFuture; }
 macro_rules! task_fn_impl {
     () => {
-        impl<F, Fut> $crate::TaskFn<()> for F
-        where
-            F: ::core::marker::Copy + ::core::ops::FnOnce() -> Fut,
-            Fut: ::core::future::Future<Output = ()> + 'static + ::core::marker::Send + ::core::marker::Sync,
+        impl<F, Fut> TaskFn<()> for F where F: Copy + FnOnce() -> Fut, Fut: SafeFuture,
         { type Fut = Fut; }
     };
-
     ($head:ident $(, $tail:ident)*) => {
-        impl<F, Fut, $head, $($tail,)*> $crate::TaskFn<($head, $($tail,)*)> for F
-        where
-            F: ::core::marker::Copy + ::core::ops::FnOnce($head, $($tail,)*) -> Fut,
-            Fut: ::core::future::Future<Output = ()> + 'static + ::core::marker::Send + ::core::marker::Sync,
+        impl<F, Fut, $head, $($tail,)*> TaskFn<($head, $($tail,)*)> for F
+        where F: Copy + FnOnce($head, $($tail,)*) -> Fut, Fut: SafeFuture,
         { type Fut = Fut; }
-
         task_fn_impl!($($tail),*);
     };
 }
 task_fn_impl!(T15, T14, T13, T12, T11, T10, T9, T8, T7, T6, T5, T4, T3, T2, T1, T0);
-pub const fn task_pool_size<F, Args, Fut, const POOL_SIZE: usize>(_: F) -> usize
-where F: TaskFn<Args, Fut = Fut>, Fut: Future<Output = ()> + 'static + Send + Sync,
-{ size_of::<TaskPool<Fut, POOL_SIZE>>() }
-
-pub const fn task_pool_align<F, Args, Fut, const POOL_SIZE: usize>(_: F) -> usize
-where F: TaskFn<Args, Fut = Fut>, Fut: Future<Output = ()> + 'static + Send + Sync,
-{ align_of::<TaskPool<Fut, POOL_SIZE>>() }
-
-pub const fn task_pool_new<F, Args, Fut, const POOL_SIZE: usize>(_: F) -> TaskPool<Fut, POOL_SIZE>
-where F: TaskFn<Args, Fut = Fut>, Fut: Future<Output = ()> + 'static + Send + Sync,
-{ TaskPool::new() }
+pub struct TaskCapture<F, Args>(PhantomData<(F, Args)>);
+impl<F, Args, Fut> TaskCapture<F, Args> where F: TaskFn<Args, Fut = Fut>, Fut: SafeFuture {
+    #[inline(always)]
+    pub const fn size<const POOL_SIZE: usize>(_: F) -> usize { size_of::<TaskPool<Fut, POOL_SIZE>>() }
+    #[inline(always)]
+    pub const fn new<const POOL_SIZE: usize>(_: F) -> TaskPool<Fut, POOL_SIZE> { TaskPool::new() }
+}

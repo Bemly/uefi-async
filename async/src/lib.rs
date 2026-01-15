@@ -1,20 +1,13 @@
-// #![warn(unreachable_pub)]
+#![warn(unreachable_pub)]
 #![no_main]
 #![no_std]
 
 extern crate alloc;
 
-mod st3;
+pub mod st3;
 pub mod executor;
-mod task;
-mod waker;
-
-pub use crate::task::{
-    TaskSlot, TaskPool, TaskPoolLayout, TaskFn, task_pool_size, task_pool_align, task_pool_new
-};
-
-
-
+pub mod task;
+pub mod waker;
 
 pub struct SpawnToken {
     pub task_ptr: *const (),
