@@ -119,7 +119,7 @@ pub(crate) fn task(attr: TokenStream, item: TokenStream) -> TokenStream {
     };
 
     quote! {
-        #[doc(hidden)]
+        // #[doc(hidden)]
         #task_inner
 
         #(#task_outer_attrs)*

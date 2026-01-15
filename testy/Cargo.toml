@@ -7,4 +7,3 @@ edition = "2024"
 uefi = { version = "0.36.1", features = ["logger", "alloc", "global_allocator", "panic_handler"] }
 uefi-async = { path = "../async" }
 uefi-async-macros = { path = "../macros" }
-embassy-executor = "0.9.1"

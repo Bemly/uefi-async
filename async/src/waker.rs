@@ -47,7 +47,7 @@ unsafe fn clone_waker(ptr: *const ()) -> RawWaker {
 }
 
 unsafe fn wake(ptr: *const ()) {
-    let header = &*(ptr as *const TaskHeader);
+    let header = unsafe { &*(ptr as *const TaskHeader) };
 
     // 使用 fetch_or 设置第 7 位
     // Ordering::Release 确保中断前的所有数据写入对执行器可见
@@ -74,7 +74,7 @@ const VTABLE: RawWakerVTable = RawWakerVTable::new(
 );
 
 /// 从 TaskSlot 创建 Waker
-pub fn from_task<F: Future<Output = ()> + 'static> (slot: *const TaskSlot<F>) -> Waker {
+pub fn from_task<F: Future<Output = ()> + 'static + Send + Sync> (slot: *const TaskSlot<F>) -> Waker {
     let raw = RawWaker::new(slot as *const (), &VTABLE);
     unsafe { Waker::from_raw(raw) }
 }

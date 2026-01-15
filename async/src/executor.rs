@@ -1,5 +1,6 @@
 use crate::st3::lifo::{Queue, Stealer, Worker};
 use crate::task::{TaskHeader, SLOT_EMPTY, SLOT_OCCUPIED};
+
 use crate::waker::WakePolicy;
 use crate::{TaskPool, TaskSlot};
 use core::mem::zeroed;
@@ -32,6 +33,7 @@ fn safe_challenge() {
     let poll_fn: fn(*mut (), &Waker) -> Poll<()> = core::mem::transmute(original_fn_ptr);
     (poll_fn)(ptr, waker);
 }
+
 pub struct Executor<const N: usize> {
     /// 本地核心的 Worker
     worker: Worker<N>,
@@ -61,7 +63,7 @@ impl<const N: usize> Executor<N> {
 
                 // 直接调用 poll_handle
                 // 内部逻辑（WakePolicy 判定、类型还原、Poll 执行）全部封装在 poll_wrapper 中
-                let _ = (header.poll_handle)(ptr, waker);
+                // let _ = (header.poll_handle)(ptr, waker);
             }
             return true;
         }
@@ -87,8 +89,7 @@ impl<F: Future<Output = ()> + 'static + Send + Sync> TaskSlot<F> {
             }
 
             // 3. 执行真正的 Future 推进
-            // let future_mut = &mut *(*slot.future.get()).as_mut_ptr();
-            let future_mut = &mut *slot.future.as_mut_ptr();
+            let future_mut = &mut *(*slot.future.get()).as_mut_ptr();
             let res = Pin::new_unchecked(&mut *future_mut).poll(&mut Context::from_waker(waker));
 
             if res.is_ready() {
@@ -168,7 +169,7 @@ impl<const N: usize> Worker<N> {
             ).is_ok() {
                 unsafe {
                     // 2. 初始化 Future 内容
-                    let future_ptr = &mut *slot.future.as_mut_ptr();
+                    let future_ptr = (*slot.future.get()).as_mut_ptr();
                     write(future_ptr, fut);
 
                     // 3. 将槽位地址推入 LIFO 队列

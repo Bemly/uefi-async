@@ -5,8 +5,7 @@ use core::cell::UnsafeCell;
 use core::mem::MaybeUninit;
 use core::sync::atomic::AtomicU8;
 use core::task::{Poll, Waker};
-use crate::util::UninitCell;
-use crate::waker::WakePolicy;
+// use crate::waker::WakePolicy;
 
 #[cfg(feature = "safe")]
 fn safe_challenge() {}
@@ -25,12 +24,12 @@ pub struct TaskHeader {
 }
 
 #[repr(C, align(128))]
-pub struct TaskSlot<F: Future<Output = ()>> {
+pub struct TaskSlot<F: Future<Output = ()> + 'static + Send + Sync> {
     pub header: TaskHeader,
-    pub future: UninitCell<F>,
+    pub future: UnsafeCell<MaybeUninit<F>>,
 }
 impl<F: Future<Output = ()> + 'static + Send + Sync> TaskSlot<F> {
-    const NEW: Self = Self::new(); // 黑魔法：绕过rust Copy Clone传染判定
+    const NEW: Self = Self::new();
     pub const fn new() -> Self {
         #[cfg(feature = "safe")]
         safe_challenge();
@@ -41,12 +40,12 @@ impl<F: Future<Output = ()> + 'static + Send + Sync> TaskSlot<F> {
                 control: AtomicU8::new(0),
                 occupied: AtomicU8::new(SLOT_EMPTY),    // 初始化为空闲状态 0
             },
-            future: UninitCell::uninit(),
+            future: UnsafeCell::new(MaybeUninit::zeroed()),
         }
     }
 }
-unsafe impl<F: Future<Output = ()> + 'static> Sync for TaskSlot<F> {}
-unsafe impl<F: Future<Output = ()> + 'static> Send for TaskSlot<F> {}
+unsafe impl<F: Future<Output = ()> + 'static + Send + Sync> Sync for TaskSlot<F> {}
+unsafe impl<F: Future<Output = ()> + 'static + Send + Sync> Send for TaskSlot<F> {}
 
 #[repr(C, align(128))]
 pub struct TaskPool<F: Future<Output = ()> + 'static + Send + Sync, const N: usize> (pub [TaskSlot<F>; N]);
@@ -55,10 +54,9 @@ impl<F: Future<Output = ()> + 'static + Send + Sync, const N: usize> TaskPool<F,
 }
 
 #[repr(C, align(128))]
-pub struct TaskPoolLayout<const SIZE: usize, const ALIGN: usize> (pub [u8; SIZE]);
-impl<const SIZE: usize, const ALIGN: usize> TaskPoolLayout<SIZE, ALIGN> {
-    pub const fn as_ptr(&self) -> *const u8 { self.0.as_ptr() }
-}
+pub struct TaskPoolLayout<const SIZE: usize, const ALIGN: usize> (pub UnsafeCell<[MaybeUninit<u8>; SIZE]>);
+unsafe impl<const SIZE: usize, const ALIGN: usize> Send for TaskPoolLayout<SIZE, ALIGN> {}
+unsafe impl<const SIZE: usize, const ALIGN: usize> Sync for TaskPoolLayout<SIZE, ALIGN> {}
 
 pub trait TaskFn<Args>: Copy { type Fut: Future<Output = ()> + 'static + Send + Sync; }
 macro_rules! task_fn_impl {
