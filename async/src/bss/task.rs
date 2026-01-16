@@ -1,11 +1,33 @@
-//! This code is inspired by the approach in this embedded Rust crate:\
-//! [https://github.com/embassy-rs/embassy/blob/main/embassy-executor-macros/src/macros/task.rs](https://github.com/embassy-rs/embassy/blob/main/embassy-executor-macros/src/macros/task.rs)
-
+//! This code is inspired by the approach in this embedded Rust crate: embassy-executor.
+//!
+//! Usage:
+//! ```rust, no-run
+//! #[doc(hidden)]
+//! fn __async_fun() -> impl Future<Output = ()> { ( move || async move {})() }
+//! fn async_fun() {
+//!     const POOL_SIZE: usize = 4;
+//!     static POOL: TaskPoolLayout<{ TaskCapture::<_, _>::size::<POOL_SIZE>(__async_fun) }> = unsafe {
+//!         transmute(TaskCapture::<_,_>::new::<POOL_SIZE>(__async_fun))
+//!     };
+//!     const fn get<F, Args, Fut>(_: F) -> &'static TaskPool<Fut, POOL_SIZE>
+//!     where F: TaskFn<Args, Fut = Fut>, Fut: SafeFuture {
+//!         const {
+//!             assert_eq!(size_of::<TaskPool<Fut, POOL_SIZE>>(), size_of_val(&POOL));
+//!             assert!(align_of::<TaskPool<Fut, POOL_SIZE>>() <= 128);
+//!         }
+//!         unsafe { &*POOL.get().cast() }
+//!     }
+//!     get(__async_fun);
+//! }
+//! ```
+use core::any::type_name;
 use core::cell::UnsafeCell;
+use core::fmt::{Debug, Formatter, Result};
 use core::marker::PhantomData;
 use core::mem::MaybeUninit;
 use core::sync::atomic::AtomicU8;
 use core::task::{Poll, Waker};
+use static_cell::StaticCell;
 
 pub trait SafeFuture: Future<Output = ()> + 'static + Send + Sync {}
 impl<T: Future<Output = ()> + 'static + Send + Sync> SafeFuture for T {}
@@ -21,26 +43,33 @@ pub struct TaskHeader {
     pub control: AtomicU8,
     pub occupied: AtomicU8,
 }
-
-#[derive(Debug)]
 #[repr(C, align(128))]
 pub struct TaskSlot<F: SafeFuture> {
     pub header: TaskHeader,
-    pub future: UnsafeCell<MaybeUninit<F>>,
+    pub future: StaticCell<F>,
 }
 unsafe impl<F: SafeFuture> Sync for TaskSlot<F> {}
 unsafe impl<F: SafeFuture> Send for TaskSlot<F> {}
 impl<F: SafeFuture> TaskSlot<F> {
-    const NEW: Self = Self::new();
-    pub const fn new() -> Self {
+    pub const NEW: Self = Self::new();
+    const fn new() -> Self {
         Self {
             header: TaskHeader {
-                poll_handle: Self::poll_wrapper,        // 魔法：自动绑定了当前的 F
-                control: AtomicU8::new(0),
-                occupied: AtomicU8::new(SLOT_EMPTY),    // 初始化为空闲状态 0
+                poll_handle: Self::poll_wrapper,       // magic: automatically binding to SafeFuture
+                control: AtomicU8::new(0),          // TODO
+                occupied: AtomicU8::new(SLOT_EMPTY),   // init
             },
-            future: UnsafeCell::new(MaybeUninit::uninit()),
+            future: StaticCell::new(),
         }
+    }
+}
+impl<F: SafeFuture> Debug for TaskSlot<F> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result {
+        let addr = format_args!("StaticCell<{}>@{:p}", type_name::<F>(), &self.future);
+        f.debug_struct("TaskSlot")
+            .field("header", &self.header)
+            .field("future", &addr)
+            .finish()
     }
 }
 
@@ -48,18 +77,16 @@ impl<F: SafeFuture> TaskSlot<F> {
 #[repr(C, align(128))]
 pub struct TaskPool<F: SafeFuture, const N: usize> (pub [TaskSlot<F>; N]);
 impl<F: SafeFuture, const N: usize> TaskPool<F, N> {
-    pub const fn new() -> Self { Self([TaskSlot::NEW; N]) }
+    #[inline(always)] pub const fn new() -> Self { Self([TaskSlot::NEW; N]) }
 }
 
-// UB
-#[derive(Debug)]
 #[repr(C, align(128))]
 pub struct TaskPoolLayout<const SIZE: usize> (pub UnsafeCell<MaybeUninit<[u8; SIZE]>>);
-impl<const SIZE: usize> TaskPoolLayout<SIZE> {
-    pub const fn new() -> Self { Self(UnsafeCell::new(MaybeUninit::uninit())) }
-}
 unsafe impl<const SIZE: usize> Send for TaskPoolLayout<SIZE> {}
 unsafe impl<const SIZE: usize> Sync for TaskPoolLayout<SIZE> {}
+impl<const SIZE: usize> TaskPoolLayout<SIZE> {
+    #[inline(always)] pub const fn get(&self) -> *const u8 { self.0.get().cast() }
+}
 
 pub trait TaskFn<Args>: Copy { type Fut: SafeFuture; }
 macro_rules! task_fn_impl {

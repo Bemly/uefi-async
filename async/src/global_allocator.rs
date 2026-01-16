@@ -10,13 +10,9 @@ pub static ALLOCATOR: UefiTalc = unsafe {
 };
 
 unsafe impl GlobalAlloc for UefiTalc {
-    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        unsafe { self.0.alloc(layout) }
-    }
+    unsafe fn alloc(&self, layout: Layout) -> *mut u8 { unsafe { self.0.alloc(layout) } }
 
-    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        unsafe { self.0.dealloc(ptr, layout) }
-    }
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) { unsafe { self.0.dealloc(ptr, layout) } }
 }
 
 impl UefiTalc {
@@ -24,7 +20,7 @@ impl UefiTalc {
         let span = Span::from_base_size(start, size);
 
         let mut talc = self.0.lock();
-        let _ = talc.claim(span);
+        let _ = unsafe { talc.claim(span) };
     }
 }
 

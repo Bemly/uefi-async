@@ -1,4 +1,4 @@
-use crate::bss::st3::{Queue, Stealer, Worker};
+use crate::bss::lifo::{Queue, Stealer, Worker};
 use crate::bss::task::{TaskHeader, TaskPool, TaskSlot, SLOT_EMPTY, SLOT_OCCUPIED};
 use crate::bss::waker::WakePolicy;
 use core::pin::Pin;

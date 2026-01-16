@@ -1,11 +1,6 @@
-use std::str::FromStr;
-
-use darling::FromMeta;
-use darling::export::NestedMeta;
-use proc_macro2::{Span, TokenStream};
+use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
-use syn::visit::{self, Visit};
-use syn::{Expr, ExprLit, FnArg, ItemFn, Lit, LitInt, ReturnType, Type, Visibility};
+use syn::{ItemFn, ReturnType, Type, Visibility};
 
 
 pub(crate) fn task(attr: TokenStream, item: TokenStream) -> TokenStream {

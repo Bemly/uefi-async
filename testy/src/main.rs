@@ -7,9 +7,10 @@ use uefi::boot::stall;
 use uefi::{entry, Status};
 use uefi_async::global_allocator::alloc_init_wrapper;
 
-// mod task;
+mod task_v1;
 mod st3_benchmark;
 mod st3_patch_benchmark;
+mod _template;
 
 #[entry]
 fn main() -> Status {
@@ -17,9 +18,12 @@ fn main() -> Status {
 
     alloc_init_wrapper();
 
+    // benchmark
     // unsafe { st3_benchmark::benchmark(); }         // 67 cycles :)
     // unsafe { st3_patch_benchmark::benchmark(); }   // 84 acycles :(
 
+    // test
+    // task_v1::task_fn();
 
     stall(Duration::from_hours(1));
     Status::SUCCESS

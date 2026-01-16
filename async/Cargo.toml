@@ -1,20 +1,25 @@
 [package]
 name = "uefi-async"
-version = "0.1.0"
+version = "0.1.5"
 edition = "2024"
 
 [features]
 default = [ "alloc" ]
-alloc = []
-no-alloc = []
-embassy-backend = [ "no-alloc" ]
-global-allocator = [ "alloc" ]
+static = [ "dep:static_cell" ]
+embassy-backend = [ "static", "dep:embassy-executor" ]
+alloc = [ "uefi/alloc", "dep:st3" ]
+global-allocator = [ "alloc", "dep:spin", "dep:talc" ]
+nya = [ "global-allocator" ]
 
 [dependencies]
-static_cell = "2.1.1"
-uefi = { version = "0.36.1", features = ["logger", "alloc", "panic_handler"] }
+uefi = "0.36.1"
 uefi-async-macros = { path = "../macros" }
-embassy-executor = "0.9.1"
-st3 = "0.4.1"
-talc = { version = "4.4.3", default-features = false, features = ["lock_api"] }
-spin = { version = "0.10.0", features = ["lock_api"] }
+
+# no-alloc
+static_cell = { version = "2.1.1", optional = true }
+embassy-executor = { version = "0.9.1", optional = true }
+
+# alloc
+st3 = { version = "0.4.1", optional = true }
+talc = { version = "4.4.3", optional = true, default-features = false, features = ["lock_api"] }
+spin = { version = "0.10.0", optional = true, features = ["lock_api"] }

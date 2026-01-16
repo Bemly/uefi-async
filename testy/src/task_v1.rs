@@ -1,74 +1,41 @@
-
-
 use core::ffi::c_void;
+use core::hint::spin_loop;
 use core::mem::transmute;
 use core::ptr;
 use core::ptr::addr_of_mut;
-use core::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use core::task::{RawWaker, Waker};
 use core::time::Duration;
 use uefi::boot::{create_event, get_handle_for_protocol, open_protocol_exclusive, stall, EventType, Tpl};
 use uefi::proto::pi::mp::MpServices;
-use uefi::{entry, println, Status};
-use uefi_async::executor::init_executor;
-use uefi_async::sleep::sleep_ms;
-use uefi_async::st3::lifo::Worker;
-use uefi_async::task::{SafeFuture, TaskCapture, TaskFn, TaskPool, TaskPoolLayout};
-use uefi_async::waker::VTABLE;
-// use uefi_async::executor::init_executor;
-
-// use uefi_async_macros::ヽ;
-// use uefi_async_macros::ヽ as Caillo;
-// Ciallo～(∠・ω< )⌒☆
-
-// #[ヽ('ε')]
-// mod example_app {
-//     fn master_setup() {}
-//     fn agent_setup() {}
-//     fn agent_main() {}
-//     fn agent_idle() {}
-//     fn on_panic() {}
-//     fn on_error() {}
-//     fn on_exit() {}
-// }
+use uefi::{println, Status};
+use uefi_async::bss::executor::init_executor;
+use uefi_async::bss::sleep::sleep_ms;
+use uefi_async::bss::lifo::Worker;
+use uefi_async::bss::task::{TaskCapture, TaskPool, TaskPoolLayout};
+use uefi_async::bss::waker::VTABLE;
 
 pub struct SpinLock(AtomicBool);
 
 impl SpinLock {
-    pub const fn new() -> Self {
-        Self(AtomicBool::new(false))
-    }
+    pub const fn new() -> Self { Self(AtomicBool::new(false)) }
 
     pub fn lock(&self) {
-        // 循环尝试将 false 改为 true
         while self.0.compare_exchange_weak(
             false, true, Ordering::Acquire, Ordering::Relaxed
-        ).is_err() {
-            core::hint::spin_loop();
-        }
+        ).is_err() { spin_loop() }
     }
 
-    pub fn unlock(&self) {
-        self.0.store(false, Ordering::Release);
-    }
+    pub fn unlock(&self) { self.0.store(false, Ordering::Release); }
 }
-
-// 定义一个全局控制台锁
 static PRINT_LOCK: SpinLock = SpinLock::new();
 
 #[derive(Copy, Clone)]
 pub struct SendPtr<T>(pub *const T);
-
-// 手动标记为 Send 和 Sync
-// 安全性声明：在 UEFI 环境下，协议指针是全局唯一的，跨核访问是物理安全的
 unsafe impl<T> Send for SendPtr<T> {}
 unsafe impl<T> Sync for SendPtr<T> {}
 
-impl<T> SendPtr<T> {
-    pub unsafe fn as_ref(&self) -> &T {
-        &*self.0
-    }
-}
+impl<T> SendPtr<T> { pub unsafe fn as_ref(&self) -> &T { &*self.0 } }
 
 
 #[repr(C)]
@@ -82,7 +49,6 @@ extern "efiapi" fn process(arg: *mut c_void) {
     let ctx = unsafe { &mut *arg.cast::<Context>() };
 
     let core_id = ctx.mp.who_am_i().expect("Failed to get core ID");
-    // 1. 获取专属执行器
     let mut executor = init_executor(core_id);
 
     let mut worker = &mut executor.worker;
@@ -90,7 +56,6 @@ extern "efiapi" fn process(arg: *mut c_void) {
     www(&mut worker, core_id, ctx.mp);
 
     let waker = unsafe { Waker::from_raw(RawWaker::new(ptr::null(), &VTABLE)) };
-    // 3. 进入执行主循环
     loop {
 
         let has_work = executor.run_step(&waker);
@@ -119,14 +84,15 @@ fn __www_task(a: usize, core_id: usize, mp_ptr: SendPtr<MpServices>) -> impl Fut
             PRINT_LOCK.unlock();
 
             sleep_ms(1000).await;
-            // stall(Duration::from_secs(1))
         }
     }
     __www_task_inner_function(a, core_id, mp_ptr)
 }
 fn www(worker: &Worker<256>, core_id: usize, mp: &MpServices) {
     const POOL_SIZE: usize = 4;
-    static POOL: TaskPoolLayout<{ TaskCapture::<_, _>::size::<POOL_SIZE>(__www_task) }> = TaskPoolLayout::new();
+    static POOL: TaskPoolLayout<{ TaskCapture::<_, _>::size::<POOL_SIZE>(__www_task) }> = unsafe {
+        transmute(TaskCapture::<_,_>::new::<POOL_SIZE>(__www_task))
+    };
     static INIT: AtomicBool = AtomicBool::new(false);
     let pool_ptr = POOL.0.get() as *mut TaskPool<_, POOL_SIZE>;
     if INIT.compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed).is_ok() {

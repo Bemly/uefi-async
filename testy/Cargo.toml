@@ -5,9 +5,6 @@ edition = "2024"
 
 [dependencies]
 uefi = { version = "0.36.1", features = ["logger", "alloc", "panic_handler"] }
-uefi-async = { path = "../async", features = [ "alloc", "no-alloc", "global-allocator" ] }
+uefi-async = { path = "../async", features = [ "alloc", "static", "global-allocator", "embassy-backend", "nya" ] }
 uefi-async-macros = { path = "../macros" }
-embassy-executor = "0.9.1"
-st3 = "0.4.1"
-talc = { version = "4.4.3", default-features = false, features = ["lock_api"] }
-spin = { version = "0.10.0", features = ["lock_api"] }
+st3 = "0.4.1" # st3 & patch benchmark use
