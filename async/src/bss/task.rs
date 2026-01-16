@@ -25,7 +25,8 @@ use core::cell::UnsafeCell;
 use core::fmt::{Debug, Formatter, Result};
 use core::marker::PhantomData;
 use core::mem::MaybeUninit;
-use core::sync::atomic::AtomicU8;
+use core::ops::{Deref, DerefMut};
+use core::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 use core::task::{Poll, Waker};
 use static_cell::StaticCell;
 
@@ -36,17 +37,17 @@ pub const SLOT_EMPTY: u8 = 0;
 pub const SLOT_OCCUPIED: u8 = 1;
 pub type TaskTypeFn = unsafe fn(*mut (), &Waker) -> Poll<()>;
 
-#[derive(Debug)]
-#[repr(C)]
+#[derive(Debug)] #[repr(C)]
 pub struct TaskHeader {
-    pub poll_handle: TaskTypeFn,
+    // pub poll_handle: TaskTypeFn,
     pub control: AtomicU8,
     pub occupied: AtomicU8,
 }
 #[repr(C, align(128))]
 pub struct TaskSlot<F: SafeFuture> {
     pub header: TaskHeader,
-    pub future: StaticCell<F>,
+    // pub future: StaticCell<spin::Mutex<F>>,
+    pub future: StaticFuture<StaticCell<F>>,
 }
 unsafe impl<F: SafeFuture> Sync for TaskSlot<F> {}
 unsafe impl<F: SafeFuture> Send for TaskSlot<F> {}
@@ -55,11 +56,11 @@ impl<F: SafeFuture> TaskSlot<F> {
     const fn new() -> Self {
         Self {
             header: TaskHeader {
-                poll_handle: Self::poll_wrapper,       // magic: automatically binding to SafeFuture
+                // poll_handle: Self::poll_wrapper,       // magic: automatically binding to SafeFuture
                 control: AtomicU8::new(0),          // TODO
                 occupied: AtomicU8::new(SLOT_EMPTY),   // init
             },
-            future: StaticCell::new(),
+            future: StaticFuture(AtomicUsize::new(0), StaticCell::new()),
         }
     }
 }
@@ -73,11 +74,70 @@ impl<F: SafeFuture> Debug for TaskSlot<F> {
     }
 }
 
-#[derive(Debug)]
+// TODO: 用 MaybeUninit
+#[derive(Debug)] #[repr(C)]
+struct StaticFuture<F>(pub AtomicUsize, pub F);
+impl<F: SafeFuture> StaticFuture<StaticCell<F>> {
+    #[inline(always)] pub fn spawn(&'static self, future: fn() -> F) -> &'static mut F {
+        match self.0.load(Ordering::Acquire) {
+            0 => {
+                let cell = self.1.uninit();
+                self.0.store(cell as *const _ as usize, Ordering::Release);
+                cell.write(future())
+            }
+            _ => {
+                // let addr = self.0.load(Ordering::Acquire) as *const F;
+
+            }
+        }
+    } // Lazy Initialization
+}
+impl<F: SafeFuture> Deref for StaticFuture<StaticCell<F>> {
+    type Target = F;
+    #[inline(always)] fn deref(&self) -> &Self::Target {
+        let addr = self.0.load(Ordering::Acquire) as *const F;
+        if addr.is_null() { panic!("Attempted to deref an uninitialized StaticFuture!") }
+        unsafe { &*addr }
+    }
+}
+impl<F: SafeFuture> DerefMut for StaticFuture<StaticCell<F>> {
+    #[inline(always)] fn deref_mut(&mut self) -> &mut Self::Target {
+        let addr = self.0.load(Ordering::Acquire) as *mut F;
+        if addr.is_null() { panic!("Attempted to deref mut an uninitialized StaticFuture!") }
+        unsafe { &mut *addr }
+    }
+}
+
 #[repr(C, align(128))]
 pub struct TaskPool<F: SafeFuture, const N: usize> (pub [TaskSlot<F>; N]);
 impl<F: SafeFuture, const N: usize> TaskPool<F, N> {
     #[inline(always)] pub const fn new() -> Self { Self([TaskSlot::NEW; N]) }
+    #[inline(always)] pub fn spawn(&'static self, f: fn() -> F) {
+        for slot in self.0.iter() {
+            if slot.header.occupied.compare_exchange(
+                SLOT_EMPTY, SLOT_OCCUPIED, Ordering::Acquire, Ordering::Relaxed
+            ).is_ok() {
+                slot.future.spawn(f);
+                // match slot.future.try_uninit() {
+                //     None => unimplemented!("task pool is not empty"), // TODO: 支持async重入
+                //     Some(cell) => cell.write(f()),
+                // };
+                // slot.future.try_init_with(f);
+            }
+        }
+    }
+    #[inline(always)] pub const fn is_running() {
+
+    }
+}
+impl<F: SafeFuture, const N: usize> Debug for TaskPool<F, N> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result {
+        f.debug_struct("TaskPool")
+            .field("size", &N)
+            .field("task_type", &type_name::<F>())
+            .field("slots", &self.0)
+            .finish()
+    }
 }
 
 #[repr(C, align(128))]

@@ -5,7 +5,7 @@ edition = "2024"
 
 [features]
 default = [ "alloc" ]
-static = [ "dep:static_cell" ]
+static = [ "dep:static_cell", "dep:spin" ]
 embassy-backend = [ "static", "dep:embassy-executor" ]
 alloc = [ "uefi/alloc", "dep:st3" ]
 global-allocator = [ "alloc", "dep:spin", "dep:talc" ]

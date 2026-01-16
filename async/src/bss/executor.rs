@@ -1,5 +1,5 @@
 use crate::bss::lifo::{Queue, Stealer, Worker};
-use crate::bss::task::{TaskHeader, TaskPool, TaskSlot, SLOT_EMPTY, SLOT_OCCUPIED};
+use crate::bss::task::{SafeFuture, TaskHeader, TaskPool, TaskSlot, SLOT_EMPTY, SLOT_OCCUPIED};
 use crate::bss::waker::WakePolicy;
 use core::pin::Pin;
 use core::ptr::write;
@@ -41,13 +41,17 @@ impl<const N: usize> Executor<N> {
         }
         false
     }
+
+    pub fn spawn<F: SafeFuture>(&self, f: F) {
+    }
 }
 
-impl<F: Future<Output = ()> + 'static + Send + Sync> TaskSlot<F> {
+impl<F: SafeFuture> TaskSlot<F> {
     /// 翻译被抹掉的类型
     pub fn poll_wrapper(ptr: *mut (), waker: &Waker) -> Poll<()> {
         unsafe {
-            let slot = &*(ptr as *const TaskSlot<F>);
+            let slot = &*(ptr as *const Self);
+            let futrue = slot.future.uninit();
 
             // 1. 原子获取并清除唤醒位
             let prev_val = slot.header.control.fetch_and(!WakePolicy::WAKE_BIT, Ordering::Acquire);

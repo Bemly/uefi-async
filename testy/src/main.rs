@@ -7,9 +7,9 @@ use uefi::boot::stall;
 use uefi::{entry, Status};
 use uefi_async::global_allocator::alloc_init_wrapper;
 
-mod task_v1;
-mod st3_benchmark;
-mod st3_patch_benchmark;
+// mod task_v1;
+// mod st3_benchmark;
+// mod st3_patch_benchmark;
 mod _template;
 
 #[entry]
@@ -17,6 +17,9 @@ fn main() -> Status {
     uefi::helpers::init().expect("Failed to init UEFI");
 
     alloc_init_wrapper();
+    
+    // template
+    _template::template();
 
     // benchmark
     // unsafe { st3_benchmark::benchmark(); }         // 67 cycles :)

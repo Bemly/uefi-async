@@ -2,9 +2,10 @@ use core::ffi::c_void;
 use core::mem::transmute;
 use core::ptr::addr_of_mut;
 use core::time::Duration;
+use static_cell::StaticCell;
 use uefi::boot::{create_event, get_handle_for_protocol, open_protocol_exclusive, stall, EventType, Tpl};
 use uefi::proto::pi::mp::MpServices;
-use uefi::Status;
+use uefi::{println, Status};
 use uefi_async::bss::task::{SafeFuture, TaskCapture, TaskFn, TaskPool, TaskPoolLayout};
 
 // use uefi_async_macros::ヽ;
@@ -33,30 +34,29 @@ extern "efiapi" fn process(arg: *mut c_void) {
     let ctx = unsafe { &mut *arg.cast::<Context>() };
 
     let core_id = ctx.mp.who_am_i().expect("Failed to get core ID");
+
+    if core_id == 0 {
+        async_fun();
+    }
 }
 
 #[doc(hidden)]
 fn __async_fun() -> impl Future<Output = ()> { ( move || async move {})() }
 fn async_fun() {
     const POOL_SIZE: usize = 4;
+
     static POOL: TaskPoolLayout<{ TaskCapture::<_, _>::size::<POOL_SIZE>(__async_fun) }> = unsafe {
         transmute(TaskCapture::<_,_>::new::<POOL_SIZE>(__async_fun))
     };
     const fn get<F, Args, Fut>(_: F) -> &'static TaskPool<Fut, POOL_SIZE>
     where F: TaskFn<Args, Fut = Fut>, Fut: SafeFuture {
-        const {
-            assert_eq!(size_of::<TaskPool<Fut, POOL_SIZE>>(), size_of_val(&POOL));
-            assert!(align_of::<TaskPool<Fut, POOL_SIZE>>() <= 128);
-        }
         unsafe { &*POOL.get().cast() }
     }
-    get(__async_fun);
+    get(__async_fun).init(move || __async_fun())
 }
 
 
 pub fn template() -> Status {
-    uefi::helpers::init().expect("Failed to init UEFI");
-
 
     let mp = get_handle_for_protocol::<MpServices>()
         .expect("Failed to get MP services");

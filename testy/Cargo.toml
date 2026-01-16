@@ -8,3 +8,4 @@ uefi = { version = "0.36.1", features = ["logger", "alloc", "panic_handler"] }
 uefi-async = { path = "../async", features = [ "alloc", "static", "global-allocator", "embassy-backend", "nya" ] }
 uefi-async-macros = { path = "../macros" }
 st3 = "0.4.1" # st3 & patch benchmark use
+static_cell = { version = "2.1.1", optional = true }
