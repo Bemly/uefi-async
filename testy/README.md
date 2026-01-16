@@ -8,7 +8,7 @@ The author wrote it in reverse order for convenience.
 
 Debug Run:
 ```shell
-qemu-system-x86_64 -drive if=pflash,format=raw,file=qemu/OVMF.fd -drive format=raw,file=fat:rw:qemu -m 4G -device usb-ehci -device usb-tablet -device virtio-gpu-pci -smp 2
+qemu-system-x86_64 -drive if=pflash,format=raw,file=qemu/OVMF.fd -drive format=raw,file=fat:rw:qemu -m 4G -device usb-ehci -device usb-tablet -device virtio-gpu-pci -smp 4
 mv ..\target\x86_64-unknown-uefi\debug\my-testy.efi .\qemu\EFI\BOOT\BOOTX64.EFI
 rm .\qemu\EFI\BOOT\BOOTX64.EFI
 cargo build

@@ -1,35 +1,10 @@
-use crate::st3::lifo::{Queue, Stealer, Worker};
-use crate::task::{TaskHeader, TaskPool, TaskSlot, SLOT_EMPTY, SLOT_OCCUPIED};
-
-use crate::waker::WakePolicy;
+use crate::bss::st3::{Queue, Stealer, Worker};
+use crate::bss::task::{TaskHeader, TaskPool, TaskSlot, SLOT_EMPTY, SLOT_OCCUPIED};
+use crate::bss::waker::WakePolicy;
 use core::pin::Pin;
 use core::ptr::write;
 use core::sync::atomic::Ordering;
 use core::task::{Context, Poll, Waker};
-
-// #[cfg(feature = "safe")]
-// use core::sync::atomic::AtomicUsize;
-// #[cfg(feature = "safe")]
-// static POINTER_COOKIE: AtomicUsize = AtomicUsize::new(0x5A5A_B6B6_C3C3_8D8D);
-// #[cfg(feature = "safe")]
-// pub fn init_executor_security(seed: usize) {
-//     POINTER_COOKIE.store(seed ^ 0xDEADBEEF, core::sync::atomic::Ordering::Relaxed);
-// }
-#[cfg(feature = "safe")]
-fn safe_challenge() {
-    // 严重降低效率
-    // 检查指针是否 128 字节对齐（如果不满足，说明指针肯定坏了）
-    if (ptr as usize) & 127 != 0 { panic!("Corrupted pointer!"); }
-
-    // 2. 检查 Magic Number
-    let magic = unsafe { *(ptr as *const usize) };
-    if magic != 0x5441534B { panic!("Not a valid TaskSlot!"); }
-    let mangled_fn_ptr = *(ptr as *const usize);
-    let original_fn_ptr = mangled_fn_ptr ^ POINTER_COOKIE.load(core::sync::atomic::Ordering::Relaxed);
-    let original_fn_ptr = mangled_fn_ptr;
-    let poll_fn: fn(*mut (), &Waker) -> Poll<()> = core::mem::transmute(original_fn_ptr);
-    (poll_fn)(ptr, waker);
-}
 
 pub struct Executor<const N: usize> {
     /// 本地核心的 Worker

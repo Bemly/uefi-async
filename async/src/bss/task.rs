@@ -6,11 +6,6 @@ use core::marker::PhantomData;
 use core::mem::MaybeUninit;
 use core::sync::atomic::AtomicU8;
 use core::task::{Poll, Waker};
-// use crate::waker::WakePolicy;
-
-#[cfg(feature = "safe")]
-fn safe_challenge() {}
-
 
 pub trait SafeFuture: Future<Output = ()> + 'static + Send + Sync {}
 impl<T: Future<Output = ()> + 'static + Send + Sync> SafeFuture for T {}
@@ -38,9 +33,6 @@ unsafe impl<F: SafeFuture> Send for TaskSlot<F> {}
 impl<F: SafeFuture> TaskSlot<F> {
     const NEW: Self = Self::new();
     pub const fn new() -> Self {
-        #[cfg(feature = "safe")]
-        safe_challenge();
-
         Self {
             header: TaskHeader {
                 poll_handle: Self::poll_wrapper,        // 魔法：自动绑定了当前的 F

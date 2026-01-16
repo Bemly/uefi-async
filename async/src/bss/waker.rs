@@ -1,7 +1,7 @@
 use core::sync::atomic::Ordering;
 use core::task::{RawWaker, RawWakerVTable, Waker};
-use crate::executor::schedule_task;
-use crate::task::{TaskHeader, TaskSlot};
+use crate::bss::executor::schedule_task;
+use crate::bss::task::{TaskHeader, TaskSlot};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
