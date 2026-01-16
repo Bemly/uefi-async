@@ -7,3 +7,6 @@ pub mod bss;
 
 #[cfg(feature = "alloc")]
 pub mod alloc;
+
+#[cfg(feature = "global-allocator")]
+pub mod global_allocator;

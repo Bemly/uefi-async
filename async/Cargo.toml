@@ -4,13 +4,17 @@ version = "0.1.0"
 edition = "2024"
 
 [features]
-default = ["alloc"]
+default = [ "alloc" ]
 alloc = []
 no-alloc = []
+embassy-backend = [ "no-alloc" ]
+global-allocator = [ "alloc" ]
 
 [dependencies]
-embassy-executor = "0.9.1"
-st3 = "0.4.1"
 static_cell = "2.1.1"
 uefi = { version = "0.36.1", features = ["logger", "alloc", "panic_handler"] }
 uefi-async-macros = { path = "../macros" }
+embassy-executor = "0.9.1"
+st3 = "0.4.1"
+talc = { version = "4.4.3", default-features = false, features = ["lock_api"] }
+spin = { version = "0.10.0", features = ["lock_api"] }
