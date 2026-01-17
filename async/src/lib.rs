@@ -4,7 +4,7 @@
 
 /// pretty unsafe, but it works.
 #[cfg(feature = "static")]
-pub mod bss;
+pub mod no_alloc;
 
 /// WIP
 #[cfg(feature = "alloc")]

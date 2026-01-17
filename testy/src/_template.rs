@@ -2,11 +2,10 @@ use core::ffi::c_void;
 use core::mem::transmute;
 use core::ptr::addr_of_mut;
 use core::time::Duration;
-use static_cell::StaticCell;
 use uefi::boot::{create_event, get_handle_for_protocol, open_protocol_exclusive, stall, EventType, Tpl};
 use uefi::proto::pi::mp::MpServices;
 use uefi::{println, Status};
-use uefi_async::bss::task::{SafeFuture, TaskCapture, TaskFn, TaskPool, TaskPoolLayout};
+use uefi_async::no_alloc::task::{SafeFuture, TaskCapture, TaskFn, TaskPool, TaskPoolLayout};
 
 // use uefi_async_macros::ヽ;
 // use uefi_async_macros::ヽ as Caillo;
@@ -52,7 +51,7 @@ fn async_fun() {
     where F: TaskFn<Args, Fut = Fut>, Fut: SafeFuture {
         unsafe { &*POOL.get().cast() }
     }
-    get(__async_fun).init(move || __async_fun())
+    get(__async_fun).spawn(move || __async_fun())
 }
 
 
