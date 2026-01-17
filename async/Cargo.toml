@@ -20,7 +20,6 @@ static_cell = { version = "2.1.1", optional = true }
 embassy-executor = { version = "0.9.1", optional = true }
 num_enum = { version = "0.7.5", optional = true, default-features = false, features = [ "complex-expressions" ] }
 
-
 # alloc
 st3 = { version = "0.4.1", optional = true }
 talc = { version = "4.4.3", optional = true, default-features = false, features = ["lock_api"] }

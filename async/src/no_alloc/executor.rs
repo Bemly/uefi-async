@@ -170,50 +170,44 @@ use crate::no_alloc::future::State;
 use crate::no_alloc::lifo::Worker;
 use crate::no_alloc::task::TaskHeader;
 
+pub const MAX_CORES: usize = 4;
+pub const QUEUE_SIZE: usize = 256;
+
+// 1. 全局原始队列池
+pub static GLOBAL_QUEUES: [Queue<QUEUE_SIZE>; MAX_CORES] = [
+    Queue::new(), Queue::new(), Queue::new(), Queue::new()
+];
+
 pub struct Executor<const N: usize> {
     pub worker: Worker<N>,
 }
 
 impl<const N: usize> Executor<N> {
-    pub fn execute_one(&self) -> bool {
-        // 从 LIFO 队列弹出最近的任务
-        let task_ptr = match self.worker.pop() {
-            Some(ptr) => ptr,
-            None => return false, // 队列为空
-        };
-
+    pub fn execute(&self, task_ptr: *mut ()) {
         let header = unsafe { &*(task_ptr as *const TaskHeader) };
 
-        // 更新状态：从 Ready 变为 Running
+        // 构造 Waker
+        let waker = self.create_waker(task_ptr);
+        let mut cx = Context::from_waker(&waker);
+
+        // 更新状态为 Running
         header.state.store(State::Running.into(), Ordering::Release);
 
-        // 创建 Waker (这里需要你实现 RawWaker，见下文)
-        let waker = self.create_waker(task_ptr);
-        let mut context = Context::from_waker(&waker);
-
-        // 调用我们在 TaskSlot 中绑定的 poll_wrapper
         unsafe {
             match (header.poll_handle)(task_ptr, &waker) {
-                Poll::Ready(()) => {
-                    // 任务结束，槽位归还
+                Poll::Ready(_) => {
                     header.state.store(State::Free.into(), Ordering::Release);
                 }
                 Poll::Pending => {
-                    // 任务挂起，通常状态变为 Waiting 或 Yielded
-                    // 具体的唤醒逻辑由 Waker 重新 push 到队列
-                    header.state.store(State::Waiting.into(), Ordering::Release);
+                    // 如果任务 yield 了，状态设为 Yielded
+                    header.state.store(State::Yielded.into(), Ordering::Release);
                 }
             }
         }
-        true
     }
-}
 
-// 简化的 RawWaker 逻辑
-unsafe fn wake_task(data: *const ()) {
-    let task_ptr = data as *mut ();
-    // 这里的关键是：Waker 如何找到对应的 Worker 队列？
-    // 方案 1: TaskHeader 里存一个全局队列指针
-    // 方案 2: 使用 thread_local 存储当前线程的 Worker
-    GLOBAL_WORKER.push(task_ptr).ok();
+    fn create_waker(&self, task_ptr: *mut ()) -> Waker {
+        // 实现 RawWakerVTable...
+        // wake() 的逻辑是：self.worker.push(task_ptr)
+    }
 }

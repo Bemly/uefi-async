@@ -7,21 +7,6 @@ use uefi::proto::pi::mp::MpServices;
 use uefi::Status;
 use uefi_async::no_alloc::task::{SafeFuture, TaskCapture, TaskFn, TaskPool, TaskPoolLayout};
 
-// use uefi_async_macros::ヽ;
-// use uefi_async_macros::ヽ as Caillo;
-// Ciallo～(∠・ω< )⌒☆
-
-// #[ヽ('ε')]
-// mod example_app {
-//     fn master_setup() {}
-//     fn agent_setup() {}
-//     fn agent_main() {}
-//     fn agent_idle() {}
-//     fn on_panic() {}
-//     fn on_error() {}
-//     fn on_exit() {}
-// }
-
 #[repr(C)]
 struct Context<'bemly_> {
     pub mp: &'bemly_ MpServices,
@@ -51,7 +36,7 @@ fn async_fun() {
 }
 
 
-pub fn template() -> Status {
+pub fn task_fn() -> Status {
 
     let mp = get_handle_for_protocol::<MpServices>()
         .expect("Failed to get MP services");

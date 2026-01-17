@@ -2,6 +2,8 @@
 #![no_main]
 #![no_std]
 
+pub mod util;
+
 /// pretty unsafe, but it works.
 #[cfg(feature = "static")]
 pub mod no_alloc;

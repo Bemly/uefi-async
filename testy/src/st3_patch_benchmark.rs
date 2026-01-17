@@ -11,7 +11,8 @@ use uefi::boot::{create_event, get_handle_for_protocol, get_image_file_system, i
 use uefi::fs::FileSystem;
 use uefi::proto::pi::mp::MpServices;
 use uefi::{cstr16, println};
-use uefi_async::bss::lifo::{Queue, Stealer, Worker};
+use uefi_async::no_alloc::lifo::{Queue, Stealer, Worker};
+use uefi_async::util::{calc_freq_blocking, tick};
 
 const QUEUE_SIZE: usize = 1024;
 static TICKS_PER_SECOND: AtomicU64 = AtomicU64::new(0);
@@ -25,17 +26,7 @@ struct Context<'a> {
     pub queues: &'static [&'static Queue<QUEUE_SIZE>],
 }
 
-#[inline(always)]
-fn time() -> u64 {
-    unsafe { core::arch::x86_64::_rdtsc() }
-}
-fn calibrate_tsc() {
-    let start = time();
-    stall(Duration::from_micros(100_000)); // 100ms
-    let end = time();
-    let ticks_per_100ms = end - start;
-    TICKS_PER_SECOND.store(ticks_per_100ms * 10, Ordering::Release);
-}
+#[inline(always)] fn calibrate_tsc() { TICKS_PER_SECOND.store(calc_freq_blocking(), Ordering::Release); }
 pub unsafe fn benchmark() {
     calibrate_tsc();
 
@@ -84,10 +75,10 @@ extern "efiapi" fn process(arg: *mut c_void) {
     stall(Duration::from_millis(50));
 
     let tps = TICKS_PER_SECOND.load(Ordering::Acquire);
-    let start_tick = time();
+    let start_tick = tick();
     let mut ops: u64 = 0;
     let duration_ticks = tps * 2;
-    while time() - start_tick < duration_ticks {
+    while tick() - start_tick < duration_ticks {
         for _ in 0..10 {
             let _ = worker.push(ops as *mut ());
             ops += 1;
@@ -105,7 +96,7 @@ extern "efiapi" fn process(arg: *mut c_void) {
         (*ctx.scores)[core_id] = ops;
     }
 
-    let actual_elapsed = time() - start_tick;
+    let actual_elapsed = tick() - start_tick;
     stall(Duration::from_millis(100));
     if core_id == 0 {
         print_and_save_report(ctx, actual_elapsed, tps);

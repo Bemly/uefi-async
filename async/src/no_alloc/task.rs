@@ -26,7 +26,7 @@ use core::cell::UnsafeCell;
 use core::fmt::{Debug, Formatter, Result};
 use core::marker::PhantomData;
 use core::mem::MaybeUninit;
-use core::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
+use core::sync::atomic::AtomicU8;
 use core::task::{Poll, Waker};
 use static_cell::StaticCell;
 
@@ -53,11 +53,11 @@ impl<F: SafeFuture> TaskSlot<F> {
     const fn new() -> Self {
         Self {
             header: TaskHeader {
-                // poll_handle: Self::poll_wrapper,       // magic: automatically binding to SafeFuture
+                // poll_handle: Self::poll_wrapper,        // magic: automatically binding to SafeFuture
                 control: AtomicU8::new(0),
                 state: AtomicU8::new(State::Free as u8),
             },
-            future: StaticFuture(AtomicUsize::new(0), StaticCell::new()),
+            future: StaticFuture::new(),                // 占位
         }
     }
 }
