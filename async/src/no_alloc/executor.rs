@@ -164,47 +164,78 @@
 //     }
 // }
 
-use core::sync::atomic::Ordering;
-use core::task::{Context, Poll};
-use crate::no_alloc::lifo::{Queue, Worker};
+use crate::no_alloc::lifo::{Queue, Stealer, Worker};
 use crate::no_alloc::task::TaskHeader;
 
-pub const MAX_CORES: usize = 4;
+pub const CORE_SIZE: usize = 4;
 pub const QUEUE_SIZE: usize = 256;
 
-pub static GLOBAL_QUEUES: [Queue<QUEUE_SIZE>; MAX_CORES] = [
+pub static GLOBAL_QUEUES: [Queue<QUEUE_SIZE>; CORE_SIZE] = [
     Queue::new(), Queue::new(), Queue::new(), Queue::new()
 ];
+//
+pub static STEALER_POOL: [Stealer<QUEUE_SIZE>; CORE_SIZE] = {
+    let mut stealers = [Stealer(&GLOBAL_QUEUES[0]); CORE_SIZE];
+    let mut i = 0;
+    while i < CORE_SIZE {
+        stealers[i] = Stealer(&GLOBAL_QUEUES[i]);
+        i += 1;
+    }
+    stealers
+};
 
-pub struct Executor;
+pub struct Executor<const QUEUE_SIZE: usize, const CORE_SIZE: usize> {
+    pub worker: Worker<QUEUE_SIZE>,
+    pub core_id: usize,
+}
 
-impl Executor {
-    
-    pub fn execute(&self, task_ptr: *mut ()) {
-        let header = unsafe { &*(task_ptr as *const TaskHeader) };
-
-        // 构造 Waker
-        let waker = self.create_waker(task_ptr);
-        let mut cx = Context::from_waker(&waker);
-
-        // 更新状态为 Running
-        header.state.store(State::Running.into(), Ordering::Release);
-
-        unsafe {
-            match (header.poll_handle)(task_ptr, &waker) {
-                Poll::Ready(_) => {
-                    header.state.store(State::Free.into(), Ordering::Release);
-                }
-                Poll::Pending => {
-                    // 如果任务 yield 了，状态设为 Yielded
-                    header.state.store(State::Yielded.into(), Ordering::Release);
-                }
-            }
+impl<const QUEUE_SIZE: usize, const CORE_SIZE: usize> Executor<QUEUE_SIZE, CORE_SIZE> {
+    pub fn new(core_id: usize) -> Self {
+        assert!(core_id < CORE_SIZE, "The pool is not enough for core allocation");
+        Executor {
+            worker: Worker::new(&GLOBAL_QUEUES[core_id]),
+            core_id
         }
     }
 
-    fn create_waker(&self, task_ptr: *mut ()) -> Waker {
-        // 实现 RawWakerVTable...
-        // wake() 的逻辑是：self.worker.push(task_ptr)
+    pub fn spawn() {
+        todo!()
+    }
+
+    pub fn run(&self) -> ! {
+        loop {
+            // 1. 本地 pop
+            if let Some(task) = self.worker.pop() {
+                self.run_task(task);
+                continue;
+            }
+
+            // 2. 遍历全局 STEALER_POOL 窃取
+            if let Some(task) = self.try_steal() {
+                self.run_task(task);
+                continue;
+            }
+
+            // 3. 节能模式：UEFI 下建议使用 CpuPause (PAUSE 指令)
+            // 防止过度争抢总线
+            core::hint::spin_loop();
+        }
+    }
+
+    fn try_steal(&self) -> Option<*mut TaskHeader> {
+        // 这里的 STEALER_POOL 寻址是极速的，因为地址是常量
+        for (id, stealer) in STEALER_POOL.iter().enumerate() {
+            if id == self.core_id { continue; }
+
+            // 尝试从其他核心偷取一半任务，并弹出一个直接执行
+            if let Ok((task, _)) = stealer.steal_and_pop(&self.worker, |n| (n + 1) / 2) {
+                return Some(task);
+            }
+        }
+        None
+    }
+
+    fn run_task(&self, task: *mut TaskHeader) {
+        // 执行逻辑...
     }
 }

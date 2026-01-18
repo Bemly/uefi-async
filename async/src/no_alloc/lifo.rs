@@ -1,12 +1,11 @@
 //! This code is inspired by the approach in this algorithm Rust crate: st3 lifo queue.
 
-use core::iter::FusedIterator;
-use core::mem::transmute;
-use core::panic::{RefUnwindSafe, UnwindSafe};
-use core::ptr::{from_ref, null_mut};
-use core::sync::atomic::{AtomicPtr, AtomicU32, AtomicU64};
-use core::sync::atomic::Ordering::{Acquire, Relaxed, Release};
 use crate::no_alloc::task::TaskHeader;
+use core::iter::FusedIterator;
+use core::panic::{RefUnwindSafe, UnwindSafe};
+use core::ptr::null_mut;
+use core::sync::atomic::Ordering::{Acquire, Relaxed, Release};
+use core::sync::atomic::{AtomicPtr, AtomicU32, AtomicU64};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StealError { Empty, Busy }
@@ -96,10 +95,6 @@ impl<const N: usize> Worker<N> {
     pub const fn new(queue: &'static Queue<N>) -> Self { Worker(queue) }
     #[inline(always)]
     pub fn stealer(&self) -> Stealer<N> { Stealer(self.0) }
-    #[inline(always)]
-    pub fn stealer_ref(&self) -> &Stealer<N> {
-        unsafe { from_ref(self).cast::<Stealer<N>>().as_ref().unwrap_unchecked() }
-    }
     pub fn spare_capacity(&self) -> usize {
         let push_count = self.0.push_count.load(Relaxed);
         let pop_count = unpack(self.0.stealer_data.pop_count_and_head.load(Relaxed)).0;

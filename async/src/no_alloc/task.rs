@@ -115,7 +115,7 @@ impl<F: SafeFuture> Deref for StaticFuture<StaticCell<F>> {
     fn deref(&self) -> &Self::Target {
         unsafe {
             let addr = self.0.get().read();
-            #[cfg(debug_assertions)] if addr == 0 { panic!("Future not initialized") }
+            debug_assert_ne!(addr, 0, "Future is not initialized");
             with_exposed_provenance::<F>(addr).as_ref().unwrap_unchecked()
         }
     }
