@@ -164,8 +164,10 @@
 //     }
 // }
 
+use core::hint::spin_loop;
+use core::sync::atomic::Ordering;
 use crate::no_alloc::lifo::{Queue, Stealer, Worker};
-use crate::no_alloc::task::TaskHeader;
+use crate::no_alloc::task::{State, TaskHeader};
 
 pub const CORE_SIZE: usize = 4;
 pub const QUEUE_SIZE: usize = 256;
@@ -173,7 +175,7 @@ pub const QUEUE_SIZE: usize = 256;
 pub static GLOBAL_QUEUES: [Queue<QUEUE_SIZE>; CORE_SIZE] = [
     Queue::new(), Queue::new(), Queue::new(), Queue::new()
 ];
-//
+
 pub static STEALER_POOL: [Stealer<QUEUE_SIZE>; CORE_SIZE] = {
     let mut stealers = [Stealer(&GLOBAL_QUEUES[0]); CORE_SIZE];
     let mut i = 0;
@@ -184,58 +186,68 @@ pub static STEALER_POOL: [Stealer<QUEUE_SIZE>; CORE_SIZE] = {
     stealers
 };
 
-pub struct Executor<const QUEUE_SIZE: usize, const CORE_SIZE: usize> {
+pub struct Executor {
     pub worker: Worker<QUEUE_SIZE>,
     pub core_id: usize,
 }
 
-impl<const QUEUE_SIZE: usize, const CORE_SIZE: usize> Executor<QUEUE_SIZE, CORE_SIZE> {
+impl Executor {
     pub fn new(core_id: usize) -> Self {
         assert!(core_id < CORE_SIZE, "The pool is not enough for core allocation");
-        Executor {
-            worker: Worker::new(&GLOBAL_QUEUES[core_id]),
-            core_id
+        Executor { worker: Worker::new(&GLOBAL_QUEUES[core_id]), core_id }
+    }
+
+    #[inline(always)]
+    pub fn add(&self, ptr: *mut TaskHeader) {
+        let head = unsafe { &*ptr };
+        if head.state.compare_exchange(
+            State::Initialized.into(), State::Ready.into(), Ordering::Acquire, Ordering::Relaxed
+        ).is_err() { todo!("Failed to change task state") }
+        if let Err(h) = self.worker.push(ptr) {
+            // TODO: User Custom Error Handler
+            panic!("Failed to push task to local queue: {:?}", h);
         }
     }
 
-    pub fn spawn() {
-        todo!()
-    }
-
-    pub fn run(&self) -> ! {
+    pub fn run(&self) {
         loop {
             // 1. 本地 pop
             if let Some(task) = self.worker.pop() {
                 self.run_task(task);
-                continue;
+                continue
             }
 
             // 2. 遍历全局 STEALER_POOL 窃取
             if let Some(task) = self.try_steal() {
                 self.run_task(task);
-                continue;
+                continue
             }
 
-            // 3. 节能模式：UEFI 下建议使用 CpuPause (PAUSE 指令)
             // 防止过度争抢总线
-            core::hint::spin_loop();
+            spin_loop();
         }
     }
 
     fn try_steal(&self) -> Option<*mut TaskHeader> {
-        // 这里的 STEALER_POOL 寻址是极速的，因为地址是常量
         for (id, stealer) in STEALER_POOL.iter().enumerate() {
-            if id == self.core_id { continue; }
+            if id == self.core_id { continue }
 
-            // 尝试从其他核心偷取一半任务，并弹出一个直接执行
-            if let Ok((task, _)) = stealer.steal_and_pop(&self.worker, |n| (n + 1) / 2) {
+            // 尝试从其他核心偷取一个直接执行
+            if let Ok((task, _)) = stealer.steal_and_pop(&self.worker, |_| 1) {
                 return Some(task);
             }
         }
         None
     }
 
-    fn run_task(&self, task: *mut TaskHeader) {
-        // 执行逻辑...
+    fn run_task(&self, ptr: *mut TaskHeader) {
+        let head = unsafe { &*ptr };
+
+        if head.state.compare_exchange(
+            State::Ready.into(), State::Running.into(), Ordering::Acquire, Ordering::Relaxed
+        ).is_err() { todo!("Failed to change task state") }
+
+        let is_ready = unsafe { (head.poll)(ptr) };
+
     }
 }

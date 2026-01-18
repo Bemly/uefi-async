@@ -28,14 +28,14 @@ use core::mem::MaybeUninit;
 use core::ops::Deref;
 use core::ptr::{drop_in_place, from_mut, from_ref, with_exposed_provenance, with_exposed_provenance_mut, write};
 use core::sync::atomic::{AtomicU8, Ordering};
-use core::task::{Poll, Waker};
 use num_enum::{FromPrimitive, IntoPrimitive};
 use static_cell::StaticCell;
 
 pub trait SafeFuture: Future<Output = ()> + 'static + Send + Sync {}
 impl<T: Future<Output = ()> + 'static + Send + Sync> SafeFuture for T {}
 pub trait TaskFn<Args>: Copy { type Fut: SafeFuture; }
-pub type TaskTypeFn = unsafe fn(*mut (), &Waker) -> Poll<()>;
+pub type TaskTypeFn = unsafe fn(*mut TaskHeader) -> bool;
+// pub type TaskTypeFn = unsafe fn(*mut (), &Waker) -> Poll<()>;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, IntoPrimitive, FromPrimitive)] #[repr(u8)]
 pub enum State {
     Free,           // 空槽
@@ -72,15 +72,17 @@ impl<F: SafeFuture> TaskSlot<F> {
     const fn new() -> Self {
         Self {
             header: TaskHeader {
-                poll: Self::poll,        // magic: automatically binding to SafeFuture
+                poll: Self::<F>::poll,        // magic: automatically binding to SafeFuture
                 control: AtomicU8::new(0),
                 state: AtomicU8::new(State::Free as u8),
             },
             future: StaticFuture::new(),                // 占位
         }
     }
-    fn poll(&self) {
 
+    // 包装函数：将 *mut TaskHeader 转回 TaskSlot<F> 并执行
+    pub unsafe fn poll(_ptr: *mut TaskHeader) -> bool {
+        todo!()
     }
 }
 impl<F: SafeFuture> StaticFuture<StaticCell<F>> {

@@ -20,12 +20,11 @@ extern "efiapi" fn process(arg: *mut c_void) {
 
     let core_id = ctx.mp.who_am_i().expect("Failed to get core ID");
     
-    let executor = Executor::new();
-    
-    if core_id == 0 {
-        println!("Core {} started", core_id);
+    let executor = Executor::new(core_id);
 
-    }
+    executor.add(async_fun());
+
+    executor.run();
 }
 
 
@@ -39,10 +38,10 @@ fn async_fun() -> *mut TaskHeader {
     static POOL: TaskPoolLayout<{ TaskCapture::<_, _>::size::<POOL_SIZE>(__async_fun) }> = unsafe {
         transmute(TaskCapture::<_,_>::new::<POOL_SIZE>(__async_fun))
     };
+
     const fn get<F, Args, Fut>(_: F) -> &'static TaskPool<Fut, POOL_SIZE>
-    where F: TaskFn<Args, Fut = Fut>, Fut: SafeFuture {
-        unsafe { &*POOL.get().cast() }
-    }
+    where F: TaskFn<Args, Fut = Fut>, Fut: SafeFuture { unsafe { &*POOL.get().cast() } }
+
     get(__async_fun).init(move || __async_fun())
 }
 
