@@ -5,7 +5,8 @@ use core::time::Duration;
 use uefi::boot::{create_event, get_handle_for_protocol, open_protocol_exclusive, stall, EventType, Tpl};
 use uefi::proto::pi::mp::MpServices;
 use uefi::{println, Status};
-use uefi_async::no_alloc::task::{SafeFuture, TaskCapture, TaskFn, TaskPool, TaskPoolLayout};
+use uefi_async::no_alloc::executor::Executor;
+use uefi_async::no_alloc::task::{SafeFuture, TaskCapture, TaskFn, TaskHeader, TaskPool, TaskPoolLayout};
 
 #[repr(C)]
 struct Context<'bemly_> {
@@ -19,17 +20,20 @@ extern "efiapi" fn process(arg: *mut c_void) {
 
     let core_id = ctx.mp.who_am_i().expect("Failed to get core ID");
     
-    
+    let executor = Executor::new();
     
     if core_id == 0 {
         println!("Core {} started", core_id);
-        
+
     }
 }
 
+
+
+
 #[doc(hidden)]
 fn __async_fun() -> impl Future<Output = ()> { ( move || async move {})() }
-fn async_fun() {
+fn async_fun() -> *mut TaskHeader {
     const POOL_SIZE: usize = 4;
 
     static POOL: TaskPoolLayout<{ TaskCapture::<_, _>::size::<POOL_SIZE>(__async_fun) }> = unsafe {

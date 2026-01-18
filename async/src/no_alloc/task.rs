@@ -26,7 +26,7 @@ use core::fmt::{Debug, Formatter, Result};
 use core::marker::PhantomData;
 use core::mem::MaybeUninit;
 use core::ops::Deref;
-use core::ptr::{drop_in_place, from_mut, with_exposed_provenance, with_exposed_provenance_mut, write};
+use core::ptr::{drop_in_place, from_mut, from_ref, with_exposed_provenance, with_exposed_provenance_mut, write};
 use core::sync::atomic::{AtomicU8, Ordering};
 use core::task::{Poll, Waker};
 use num_enum::{FromPrimitive, IntoPrimitive};
@@ -124,7 +124,7 @@ impl<F: SafeFuture, const N: usize> TaskPool<F, N> {
     #[inline(always)]
     pub const fn new() -> Self { Self([TaskSlot::NEW; N]) }
     #[inline(always)]
-    pub fn init(&'static self, future: impl FnOnce() -> F) -> *const TaskHeader {
+    pub fn init(&'static self, future: impl FnOnce() -> F) -> *mut TaskHeader {
         for slot in self.0.iter() {
             if slot.header.state.compare_exchange(
                 State::Free.into(), State::Initialized.into(), Ordering::Acquire, Ordering::Relaxed
@@ -134,7 +134,7 @@ impl<F: SafeFuture, const N: usize> TaskPool<F, N> {
             // impl NRVO (Named Return Value Optimization), avoid stack overflow
             unsafe { slot.future.init(future) }
 
-            return &slot.header as *const TaskHeader
+            return from_ref(&slot.header).cast_mut()
         }
 
         panic!("TaskPool capacity exceeded! No empty slots available.");

@@ -166,23 +166,19 @@
 
 use core::sync::atomic::Ordering;
 use core::task::{Context, Poll};
-use crate::no_alloc::lifo::Worker;
+use crate::no_alloc::lifo::{Queue, Worker};
 use crate::no_alloc::task::TaskHeader;
 
 pub const MAX_CORES: usize = 4;
 pub const QUEUE_SIZE: usize = 256;
 
-// 1. 全局原始队列池
 pub static GLOBAL_QUEUES: [Queue<QUEUE_SIZE>; MAX_CORES] = [
     Queue::new(), Queue::new(), Queue::new(), Queue::new()
 ];
 
-pub struct Executor<const N: usize> {
-    pub worker: Worker<N>,
-}
+pub struct Executor;
 
-impl<const N: usize> Executor<N> {
-    pub fn
+impl Executor {
     
     pub fn execute(&self, task_ptr: *mut ()) {
         let header = unsafe { &*(task_ptr as *const TaskHeader) };
