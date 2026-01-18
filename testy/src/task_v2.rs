@@ -4,7 +4,7 @@ use core::ptr::addr_of_mut;
 use core::time::Duration;
 use uefi::boot::{create_event, get_handle_for_protocol, open_protocol_exclusive, stall, EventType, Tpl};
 use uefi::proto::pi::mp::MpServices;
-use uefi::Status;
+use uefi::{println, Status};
 use uefi_async::no_alloc::task::{SafeFuture, TaskCapture, TaskFn, TaskPool, TaskPoolLayout};
 
 #[repr(C)]
@@ -18,6 +18,13 @@ extern "efiapi" fn process(arg: *mut c_void) {
     let ctx = unsafe { &mut *arg.cast::<Context>() };
 
     let core_id = ctx.mp.who_am_i().expect("Failed to get core ID");
+    
+    
+    
+    if core_id == 0 {
+        println!("Core {} started", core_id);
+        
+    }
 }
 
 #[doc(hidden)]
@@ -32,7 +39,7 @@ fn async_fun() {
     where F: TaskFn<Args, Fut = Fut>, Fut: SafeFuture {
         unsafe { &*POOL.get().cast() }
     }
-    get(__async_fun).spawn(move || __async_fun())
+    get(__async_fun).init(move || __async_fun())
 }
 
 

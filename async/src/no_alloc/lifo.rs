@@ -1,4 +1,4 @@
-//! This code is inspired by the approach in this embedded Rust crate: st3
+//! This code is inspired by the approach in this algorithm Rust crate: st3 lifo queue.
 
 use core::iter::FusedIterator;
 use core::mem::transmute;
@@ -6,6 +6,7 @@ use core::panic::{RefUnwindSafe, UnwindSafe};
 use core::ptr::null_mut;
 use core::sync::atomic::{AtomicPtr, AtomicU32, AtomicU64};
 use core::sync::atomic::Ordering::{Acquire, Relaxed, Release};
+use crate::no_alloc::task::TaskHeader;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StealError { Empty, Busy }
@@ -13,20 +14,26 @@ pub enum StealError { Empty, Busy }
 #[inline] fn unpack(v: u64) -> (u32, u32) { ((v >> u32::BITS) as u32, v as u32) }
 
 #[derive(Debug)] #[repr(C, align(128))]
+pub struct Ptr<const N: usize> ([AtomicPtr<TaskHeader>; N]);
+#[derive(Debug)] #[repr(C, align(128))]
+pub struct StealerData { pub pop_count_and_head: AtomicU64, pub head: AtomicU32 }
+#[derive(Debug)] #[repr(C, align(128))]
 pub struct Queue<const N: usize> {
     pub push_count: AtomicU32, pub stealer_data: StealerData, pub buffer: Ptr<N>,
 }
-#[derive(Debug)] #[repr(C, align(128))]
-pub struct Ptr<const N: usize> ([AtomicPtr<()>; N]);
+#[derive(Debug)] #[repr(transparent)]
+pub struct Stealer<const N: usize> (pub &'static Queue<N>);
+#[derive(Debug)] #[repr(transparent)]
+pub struct Worker<const N: usize> (pub &'static Queue<N>);
+#[derive(Debug)]
+pub struct Drain<'a, const N: usize> { queue: &'a Queue<N>, current: u32, end: u32 }
+
 impl<const N: usize> Ptr<N> {
     pub const fn new() -> Self {
-        const EMPTY_PTR: AtomicPtr<()> = AtomicPtr::new(null_mut());
+        const EMPTY_PTR: AtomicPtr<TaskHeader> = AtomicPtr::new(null_mut());
         Self([EMPTY_PTR; N])
     }
 }
-#[derive(Debug)] #[repr(C, align(128))]
-pub struct StealerData { pub pop_count_and_head: AtomicU64, pub head: AtomicU32 }
-
 impl<const N: usize> Queue<N> {
     const _CHECK_N: () = assert!(N.is_power_of_two(), "N must be a power of two");
     const MASK: u32 = (N - 1) as u32;
@@ -40,11 +47,11 @@ impl<const N: usize> Queue<N> {
             buffer: Ptr::new(),
         }
     }
-    #[inline(always)] unsafe fn read_at(&self, position: u32) -> *mut () {
+    #[inline(always)] unsafe fn read_at(&self, position: u32) -> *mut TaskHeader {
         let index = (position & Self::MASK) as usize;
         self.buffer.0[index].load(Acquire)
     }
-    #[inline(always)] unsafe fn write_at(&self, position: u32, item: *mut ()) {
+    #[inline(always)] unsafe fn write_at(&self, position: u32, item: *mut TaskHeader) {
         let index = (position & Self::MASK) as usize;
         self.buffer.0[index].store(item, Release);
     }
@@ -83,12 +90,6 @@ impl<const N: usize> Queue<N> {
         }
     }
 }
-
-#[derive(Debug)]
-pub struct Worker<const N: usize> (pub &'static Queue<N>);
-impl<const N: usize> UnwindSafe for Worker<N> {}
-impl<const N: usize> RefUnwindSafe for Worker<N> {}
-unsafe impl<const N: usize> Send for Worker<N> {}
 impl<const N: usize> Worker<N> {
     pub const fn new(queue: &'static Queue<N>) -> Self { Worker(queue) }
     pub fn stealer(&self) -> Stealer<N> { Stealer(self.0) }
@@ -106,7 +107,7 @@ impl<const N: usize> Worker<N> {
         let (pop_count, head) = unpack(self.0.stealer_data.pop_count_and_head.load(Relaxed));
         push_count.wrapping_sub(pop_count) == head
     }
-    pub fn push(&self, item: *mut ()) -> Result<(), *mut ()> {
+    pub fn push(&self, item: *mut TaskHeader) -> Result<(), *mut TaskHeader> {
         let push_count = self.0.push_count.load(Relaxed);
         let pop_count_and_head = self.0.stealer_data.pop_count_and_head.load(Acquire);
         let (pop_count, head) = unpack(pop_count_and_head);
@@ -118,7 +119,7 @@ impl<const N: usize> Worker<N> {
         self.0.push_count.store(push_count.wrapping_add(1), Release);
         Ok(())
     }
-    pub fn extend<I: IntoIterator<Item = *mut ()>>(&self, iter: I) {
+    pub fn extend<I: IntoIterator<Item = *mut TaskHeader>>(&self, iter: I) {
         let push_count = self.0.push_count.load(Relaxed);
         let pop_count = unpack(self.0.stealer_data.pop_count_and_head.load(Relaxed)).0;
         let mut tail = push_count.wrapping_sub(pop_count);
@@ -132,7 +133,7 @@ impl<const N: usize> Worker<N> {
         }
         self.0.push_count.store(tail.wrapping_add(pop_count), Release);
     }
-    pub fn pop(&self) -> Option<*mut ()> {
+    pub fn pop(&self) -> Option<*mut TaskHeader> {
         let mut pop_count_and_head = self.0.stealer_data.pop_count_and_head.load(Relaxed);
         let push_count = self.0.push_count.load(Relaxed);
         let (pop_count, mut head) = unpack(pop_count_and_head);
@@ -159,48 +160,11 @@ impl<const N: usize> Worker<N> {
         let (old_head, new_head, _) = self.0.book_items(count_fn, u32::MAX)?;
         Ok(Drain { queue: &self.0, current: old_head, end: new_head })
     }
-    pub fn clear<F>(&self, mut dropper: F) where F: FnMut(*mut ()) {
+    pub fn clear<F>(&self, mut dropper: F) where F: FnMut(*mut TaskHeader) {
         if let Ok(drain) = self.drain(|count| count) {
             for ptr in drain { dropper(ptr) }
         }
     }
-}
-
-#[derive(Debug)]
-pub struct Drain<'a, const N: usize> { queue: &'a Queue<N>, current: u32, end: u32 }
-impl<'a, const N: usize> ExactSizeIterator for Drain<'a, N> {}
-impl<'a, const N: usize> FusedIterator for Drain<'a, N> {}
-impl<'a, const N: usize> UnwindSafe for Drain<'a, N> {}
-impl<'a, const N: usize> RefUnwindSafe for Drain<'a, N> {}
-unsafe impl<'a, const N: usize> Send for Drain<'a, N> {}
-unsafe impl<'a, const N: usize> Sync for Drain<'a, N> {}
-impl<'a, const N: usize> Drop for Drain<'a, N> { fn drop(&mut self) { for _item in self {} } }
-impl<'a, const N: usize> Iterator for Drain<'a, N> {
-    type Item = *mut ();
-    fn next(&mut self) -> Option<*mut ()> {
-        if self.current == self.end { return None }
-        let item = unsafe { self.queue.read_at(self.current) };
-        self.current = self.current.wrapping_add(1);
-        if self.current == self.end { self.queue.stealer_data.head.store(self.end, Release) }
-        Some(item)
-    }
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        let sz = self.end.wrapping_sub(self.current) as usize;
-        (sz, Some(sz))
-    }
-}
-
-#[derive(Debug)] #[repr(transparent)]
-pub struct Stealer<const N: usize> (pub &'static Queue<N>);
-impl<const N: usize> UnwindSafe for Stealer<N> {}
-impl<const N: usize> RefUnwindSafe for Stealer<N> {}
-unsafe impl<const N: usize> Send for Stealer<N> {}
-unsafe impl<const N: usize> Sync for Stealer<N> {}
-impl<const N: usize> Copy for Stealer<N> {}
-impl<const N: usize> Clone for Stealer<N> { #[inline(always)] fn clone(&self) -> Self { *self } }
-impl<const N: usize> Eq for Stealer<N> {}
-impl<const N: usize> PartialEq for Stealer<N> {
-    #[inline(always)] fn eq(&self, other: &Self) -> bool { core::ptr::eq(self.0, other.0) }
 }
 impl<const N: usize> Stealer<N> {
     pub fn steal<C>(&self, dest: &Worker<N>, count_fn: C) -> Result<usize, StealError>
@@ -222,7 +186,7 @@ impl<const N: usize> Stealer<N> {
         self.0.stealer_data.head.store(new_head, Release);
         Ok(transfer_count as usize)
     }
-    pub fn steal_and_pop<C>(&self, dest: &Worker<N>, count_fn: C) -> Result<(*mut (), usize), StealError>
+    pub fn steal_and_pop<C>(&self, dest: &Worker<N>, count_fn: C) -> Result<(*mut TaskHeader, usize), StealError>
     where C: FnMut(usize) -> usize {
         let dest_push_count = dest.0.push_count.load(Relaxed);
         let dest_pop_count = unpack(dest.0.stealer_data.pop_count_and_head.load(Relaxed)).0;
@@ -244,3 +208,37 @@ impl<const N: usize> Stealer<N> {
         Ok((last_item, transfer_count as usize))
     }
 }
+impl<'a, const N: usize> Iterator for Drain<'a, N> {
+    type Item = *mut TaskHeader;
+    fn next(&mut self) -> Option<*mut TaskHeader> {
+        if self.current == self.end { return None }
+        let item = unsafe { self.queue.read_at(self.current) };
+        self.current = self.current.wrapping_add(1);
+        if self.current == self.end { self.queue.stealer_data.head.store(self.end, Release) }
+        Some(item)
+    }
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let sz = self.end.wrapping_sub(self.current) as usize;
+        (sz, Some(sz))
+    }
+}
+impl<'a, const N: usize> Drop for Drain<'a, N> { fn drop(&mut self) { self.for_each(drop) } }
+impl<const N: usize> Clone for Stealer<N> { #[inline(always)] fn clone(&self) -> Self { *self } }
+impl<const N: usize> PartialEq for Stealer<N> {
+    #[inline(always)] fn eq(&self, other: &Self) -> bool { core::ptr::eq(self.0, other.0) }
+}
+impl<const N: usize> Eq for Stealer<N> {}
+impl<const N: usize> UnwindSafe for Stealer<N> {}
+impl<const N: usize> RefUnwindSafe for Stealer<N> {}
+unsafe impl<const N: usize> Send for Stealer<N> {}
+unsafe impl<const N: usize> Sync for Stealer<N> {}
+impl<const N: usize> Copy for Stealer<N> {}
+impl<const N: usize> UnwindSafe for Worker<N> {}
+impl<const N: usize> RefUnwindSafe for Worker<N> {}
+unsafe impl<const N: usize> Send for Worker<N> {}
+impl<'a, const N: usize> ExactSizeIterator for Drain<'a, N> {}
+impl<'a, const N: usize> FusedIterator for Drain<'a, N> {}
+impl<'a, const N: usize> UnwindSafe for Drain<'a, N> {}
+impl<'a, const N: usize> RefUnwindSafe for Drain<'a, N> {}
+unsafe impl<'a, const N: usize> Send for Drain<'a, N> {}
+unsafe impl<'a, const N: usize> Sync for Drain<'a, N> {}

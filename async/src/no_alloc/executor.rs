@@ -166,7 +166,6 @@
 
 use core::sync::atomic::Ordering;
 use core::task::{Context, Poll};
-use crate::no_alloc::future::State;
 use crate::no_alloc::lifo::Worker;
 use crate::no_alloc::task::TaskHeader;
 
@@ -183,6 +182,8 @@ pub struct Executor<const N: usize> {
 }
 
 impl<const N: usize> Executor<N> {
+    pub fn
+    
     pub fn execute(&self, task_ptr: *mut ()) {
         let header = unsafe { &*(task_ptr as *const TaskHeader) };
 

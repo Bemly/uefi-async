@@ -20,4 +20,4 @@ qemu-system-x86_64 -drive if=pflash,format=raw,file=qemu/OVMF.fd -drive format=r
 mv ..\target\x86_64-unknown-uefi\release\my-testy.efi .\qemu\EFI\BOOT\BOOTX64.EFI
 rm .\qemu\EFI\BOOT\BOOTX64.EFI
 cargo build --release
-```
+``` 

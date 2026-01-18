@@ -47,7 +47,7 @@ fn async_fun() {
     where F: TaskFn<Args, Fut = Fut>, Fut: SafeFuture {
         unsafe { &*POOL.get().cast() }
     }
-    get(__async_fun).spawn(move || __async_fun())
+    get(__async_fun).init(move || __async_fun())
 }
 
 
