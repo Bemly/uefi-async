@@ -9,6 +9,3 @@ uefi-async = { path = "../async", features = [ "alloc", "static", "global-alloca
 uefi-async-macros = { path = "../macros" }
 st3 = "0.4.1" # st3 & patch benchmark use
 spin = "0.10.0"
-
-
-static_assertions = "1.1.0" # only test

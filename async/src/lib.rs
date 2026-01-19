@@ -15,3 +15,4 @@ pub mod alloc;
 /// WIP
 #[cfg(feature = "global-allocator")]
 pub mod global_allocator;
+mod nano_cast;

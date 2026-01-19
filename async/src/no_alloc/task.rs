@@ -26,8 +26,10 @@ use core::fmt::{Debug, Formatter, Result};
 use core::marker::PhantomData;
 use core::mem::MaybeUninit;
 use core::ops::Deref;
-use core::ptr::{drop_in_place, from_mut, from_ref, with_exposed_provenance, with_exposed_provenance_mut, write};
+use core::pin::Pin;
+use core::ptr::{drop_in_place, from_mut, from_ref, with_exposed_provenance_mut, write};
 use core::sync::atomic::{AtomicU8, Ordering};
+use core::task::{Context, Poll, Waker};
 use num_enum::{FromPrimitive, IntoPrimitive};
 use static_cell::StaticCell;
 
@@ -72,7 +74,7 @@ impl<F: SafeFuture> TaskSlot<F> {
     const fn new() -> Self {
         Self {
             header: TaskHeader {
-                poll: Self::<F>::poll,        // magic: automatically binding to SafeFuture
+                poll: TaskSlot::<F>::poll,        // magic: automatically binding to SafeFuture
                 control: AtomicU8::new(0),
                 state: AtomicU8::new(State::Free as u8),
             },
@@ -81,8 +83,19 @@ impl<F: SafeFuture> TaskSlot<F> {
     }
 
     // 包装函数：将 *mut TaskHeader 转回 TaskSlot<F> 并执行
-    pub unsafe fn poll(_ptr: *mut TaskHeader) -> bool {
-        todo!()
+    pub const unsafe fn poll(ptr: *mut TaskHeader) -> bool {
+        let slot = unsafe { &*ptr.cast::<TaskSlot<F>>() };
+
+        let waker = unsafe { Waker::from_raw() };
+        let mut ctx = Context::from_waker(&waker);
+
+        // SAFETY: static future, no move
+        let future = unsafe { Pin::new_unchecked(slot.future.get_mut()) };
+
+        match future.poll(&mut ctx) {
+            Poll::Ready(_) => true,
+            Poll::Pending => false,
+        }
     }
 }
 impl<F: SafeFuture> StaticFuture<StaticCell<F>> {
@@ -110,15 +123,13 @@ impl<F: SafeFuture> StaticFuture<StaticCell<F>> {
             }
         }
     }
-}
-impl<F: SafeFuture> Deref for StaticFuture<StaticCell<F>> {
-    type Target = F;
+
     #[inline(always)]
-    fn deref(&self) -> &Self::Target {
+    pub unsafe fn get_mut(&self) -> &mut F {
         unsafe {
             let addr = self.0.get().read();
             debug_assert_ne!(addr, 0, "Future is not initialized");
-            with_exposed_provenance::<F>(addr).as_ref().unwrap_unchecked()
+            with_exposed_provenance_mut::<F>(addr).as_mut().unwrap_unchecked()
         }
     }
 }

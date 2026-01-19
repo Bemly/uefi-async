@@ -247,7 +247,12 @@ impl Executor {
             State::Ready.into(), State::Running.into(), Ordering::Acquire, Ordering::Relaxed
         ).is_err() { todo!("Failed to change task state") }
 
+        // SAFETY: TaskHeader size equaled.
         let is_ready = unsafe { (head.poll)(ptr) };
-
+        if is_ready {
+            if head.state.compare_exchange(
+                State::Running.into(), State::Unreachable.into(), Ordering::Acquire, Ordering::Relaxed
+            ).is_err() { todo!("Failed to change task state") }
+        }
     }
 }

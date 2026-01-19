@@ -1,7 +1,6 @@
 use core::sync::atomic::Ordering;
 use core::task::{RawWaker, RawWakerVTable, Waker};
-use crate::bss::executor::schedule_task;
-use crate::bss::task::{TaskHeader, TaskSlot};
+use crate::no_alloc::task::TaskHeader;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
@@ -40,39 +39,40 @@ impl WakePolicy {
 
 
 
-// VTable 实现
-unsafe fn clone_waker(ptr: *const ()) -> RawWaker {
+// Waker 的虚函数表
+static VTABLE: RawWakerVTable = RawWakerVTable::new(
+    waker_clone,
+    waker_wake,
+    waker_wake_by_ref,
+    waker_drop,
+);
+
+unsafe fn waker_clone(ptr: *const ()) -> RawWaker {
     RawWaker::new(ptr, &VTABLE)
 }
 
-unsafe fn wake(ptr: *const ()) {
-    let header = unsafe { &*(ptr as *const TaskHeader) };
+// 核心逻辑：唤醒任务
+unsafe fn waker_wake(ptr: *const ()) {
+    let task_ptr = ptr as *mut TaskHeader;
+    let header = &*task_ptr;
 
-    // 使用 fetch_or 设置第 7 位
-    // Ordering::Release 确保中断前的所有数据写入对执行器可见
-    let prev = header.control.fetch_or(WakePolicy::WAKE_BIT, Ordering::Release);
+    // 1. 更新状态：从 Waiting/Running 变为 Ready
+    // 只有状态切换成功，才允许重新入队，防止重复入队
+    header.state.store(State::Ready.into(), Ordering::Release);
 
-    // 核心逻辑：设置唤醒标志位
-    // 使用 swap 确保原子性，并起到去重作用（Deduplication）
-    // 如果之前已经是 1，说明任务已经在队列中或者正在运行且已被标记，无需重复推入队列
-    if (prev & WakePolicy::WAKE_BIT) == 0 {
-        // 只有当状态从 0 变为 1 时，才真正将任务推入调度队列
-        schedule_task(ptr as *mut ());
-    }
+    // 2. 重新入队
+    // 在 UEFI 多核中，最简单的做法是根据 core_id 找到对应的全局 Worker
+    // 假设你在 TaskHeader 里存了初始化的 core_id
+    let core_id = header.control.load(Ordering::Relaxed) as usize;
+    let worker = Worker::new(&GLOBAL_QUEUES[core_id]);
+
+    let _ = worker.push(task_ptr);
 }
 
-unsafe fn drop_waker(_ptr: *const ()) {
-    // 这里的 ptr 指向静态分配的 TaskSlot，不需要我们回收内存
+unsafe fn waker_wake_by_ref(ptr: *const ()) {
+    waker_wake(ptr);
 }
-pub const VTABLE: RawWakerVTable = RawWakerVTable::new(
-    clone_waker,
-    wake,
-    wake,
-    drop_waker,
-);
 
-/// 从 TaskSlot 创建 Waker
-pub fn from_task<F: Future<Output = ()> + 'static + Send + Sync> (slot: *const TaskSlot<F>) -> Waker {
-    let raw = RawWaker::new(slot as *const (), &VTABLE);
-    unsafe { Waker::from_raw(raw) }
+unsafe fn waker_drop(_ptr: *const ()) {
+    // 静态内存任务不需要手动释放内存
 }
