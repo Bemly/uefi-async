@@ -13,7 +13,7 @@ use uefi::proto::pi::mp::MpServices;
 use uefi::{cstr16, println};
 use uefi_async::no_alloc::lifo::{Queue, Stealer, Worker};
 use uefi_async::no_alloc::task::TaskHeader;
-use uefi_async::util::{calc_freq_blocking, tick};
+use uefi_async::common::{calc_freq_blocking, tick};
 
 const QUEUE_SIZE: usize = 1024;
 static TICKS_PER_SECOND: AtomicU64 = AtomicU64::new(0);

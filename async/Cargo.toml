@@ -12,7 +12,8 @@ version.workspace = true
 readme.workspace = true
 
 [features]
-default = [ "alloc" ]
+default = [ "nano-alloc" ]
+#default = [ "alloc" ]
 
 # no-alloc
 static = [ "dep:static_cell", "dep:spin", "dep:num_enum" ]
@@ -20,7 +21,7 @@ embassy-backend = [ "static", "dep:embassy-executor" ]
 edge-backend = [ "static", "dep:edge-executor" ]
 
 # nano-alloc
-nano-alloc = []
+nano-alloc = [ "uefi/alloc" ]
 cassette-backend = [ "nano-alloc", "dep:cassette" ]
 
 # alloc

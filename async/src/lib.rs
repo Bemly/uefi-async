@@ -62,10 +62,10 @@
 //!
 //! or more advanced usage:
 //!
-//! ```rust
+//!```rust
 //! extern crate alloc;
 //! use uefi_async::nano_alloc::{Executor, add};
-//! use uefi_async::util::tick;
+//! use uefi_async::common::tick;
 //!
 //! async fn af1() {}
 //! async fn af2(_: usize) {}
@@ -117,9 +117,14 @@
 #![no_std]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
+#[cfg(any(feature = "nano-alloc", feature = "alloc"))]
+extern crate alloc;
+
 /// Utility functions for hardware timing and platform-specific operations.
+///
 /// Includes the TSC-based tick counter and frequency calibration.
-pub mod util;
+pub mod common;
+pub use common::*;
 
 /// Static task management module.
 ///
@@ -135,7 +140,7 @@ pub mod no_alloc;
 /// `Box` and `Pin` for flexible task management.
 /// Requires a global allocator to be defined.
 #[cfg(feature = "alloc")]
-pub mod alloc;
+pub mod dynamic;
 
 /// Helper module for setting up a global allocator in UEFI.
 ///
@@ -150,4 +155,3 @@ pub mod global_allocator;
 /// footprint, specifically optimized for managing asynchronous task nodes.
 #[cfg(feature = "nano-alloc")]
 pub mod nano_alloc;
-pub mod future;

@@ -6,7 +6,7 @@ use uefi::boot::{create_event, get_handle_for_protocol, open_protocol_exclusive,
 use uefi::proto::pi::mp::MpServices;
 use uefi::Status;
 use uefi_async::nano_alloc::{Executor, TaskNode, add};
-use uefi_async::util::tick;
+use uefi_async::tick;
 
 #[repr(C)]
 struct Context<'bemly_> {
