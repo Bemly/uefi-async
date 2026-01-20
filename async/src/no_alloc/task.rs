@@ -1,7 +1,7 @@
 //! This code is inspired by the approach in this embedded Rust crate: embassy-executor.
 //!
 //! Usage:
-//! ```rust, no-run
+//! ```rust, no_run
 //! #[doc(hidden)]
 //! fn __async_fun() -> impl Future<Output = ()> { ( move || async move {})() }
 //! fn async_fun() {

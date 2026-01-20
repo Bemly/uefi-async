@@ -117,19 +117,37 @@
 #![no_std]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
+/// Utility functions for hardware timing and platform-specific operations.
+/// Includes the TSC-based tick counter and frequency calibration.
 pub mod util;
 
-/// pretty unsafe, but it works.
+/// Static task management module.
+///
+/// This module provides a mechanism for running the executor without
+/// a dynamic memory allocator, utilizing static memory or stack-allocated
+/// task nodes. Useful for highly constrained environments.
 #[cfg(feature = "static")]
 pub mod no_alloc;
 
-/// WIP
+/// Standard asynchronous executor implementation using `alloc`.
+///
+/// Provides the Executor and TaskNode types that rely on
+/// `Box` and `Pin` for flexible task management.
+/// Requires a global allocator to be defined.
 #[cfg(feature = "alloc")]
 pub mod alloc;
 
-/// WIP
+/// Helper module for setting up a global allocator in UEFI.
+///
+/// When enabled, this module provides a bridge between the Rust
+/// memory allocation API and the UEFI Boot Services memory allocation functions.
 #[cfg(feature = "global-allocator")]
 pub mod global_allocator;
 
+/// Specialized, lightweight memory allocator for constrained systems.
+///
+/// A minimal allocator implementation designed to have a very small
+/// footprint, specifically optimized for managing asynchronous task nodes.
 #[cfg(feature = "nano-alloc")]
 pub mod nano_alloc;
+pub mod future;

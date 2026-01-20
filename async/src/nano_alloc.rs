@@ -4,7 +4,22 @@ use alloc::boxed::Box;
 use core::pin::Pin;
 use core::task::{Context, Poll, Waker};
 
-pub use uefi_async_macros::add;
+/// Procedural macro logic to initialize and register task nodes to executors.
+///
+/// # Expansion
+/// For every task defined, this macro generates:
+/// 1. A unique variable name (e.g., `__node_0_1`).
+/// 2. A `TaskNode` initialization with a pinned function and frequency.
+/// 3. A registration call adding the node to the specified executor.
+///
+/// # Example Input
+/// ```rust, no_run
+/// executor => {
+///     100 -> task_one(),
+///     my_config.interval -> || { do_work() }
+/// }
+/// ```
+pub use uefi_async_macros::nano as add;
 
 /// A node in a linked-list representing an asynchronous task.
 ///

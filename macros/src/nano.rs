@@ -82,7 +82,7 @@ impl Parse for AddInput {
 /// 3. A registration call adding the node to the specified executor.
 ///
 /// # Example Input
-/// ```rust, no-run
+/// ```rust, no_run
 /// executor => {
 ///     100 -> task_one(),
 ///     my_config.interval -> || { do_work() }
@@ -105,7 +105,6 @@ pub fn task(input: TokenStream) -> TokenStream {
             let freq = &task.freq;
 
             declarations.push(quote! {
-                // 使用 (#freq) as u64 确保优先级正确
                 let mut #var_name = TaskNode::new(Box::pin(#func), #freq);
                 #exec_name.add(&mut #var_name);
             });

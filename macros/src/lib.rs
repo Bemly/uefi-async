@@ -159,5 +159,20 @@ pub fn task(attr: TokenStream, item: TokenStream) -> TokenStream {
     task::task(attr.into(), item.into()).into()
 }
 
+/// Procedural macro logic to initialize and register task nodes to executors.
+///
+/// # Expansion
+/// For every task defined, this macro generates:
+/// 1. A unique variable name (e.g., `__node_0_1`).
+/// 2. A `TaskNode` initialization with a pinned function and frequency.
+/// 3. A registration call adding the node to the specified executor.
+///
+/// # Example Input
+/// ```rust, no_run
+/// executor => {
+///     100 -> task_one(),
+///     my_config.interval -> || { do_work() }
+/// }
+/// ```
 #[proc_macro]
-pub fn add(input: TokenStream) -> TokenStream { nano::task(input.into()).into() }
+pub fn nano(input: TokenStream) -> TokenStream { nano::task(input.into()).into() }
