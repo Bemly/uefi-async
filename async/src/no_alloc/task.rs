@@ -83,19 +83,20 @@ impl<F: SafeFuture> TaskSlot<F> {
     }
 
     // 包装函数：将 *mut TaskHeader 转回 TaskSlot<F> 并执行
-    pub const unsafe fn poll(ptr: *mut TaskHeader) -> bool {
+    pub unsafe fn poll(ptr: *mut TaskHeader) -> bool {
         let slot = unsafe { &*ptr.cast::<TaskSlot<F>>() };
 
-        let waker = unsafe { Waker::from_raw() };
-        let mut ctx = Context::from_waker(&waker);
-
-        // SAFETY: static future, no move
-        let future = unsafe { Pin::new_unchecked(slot.future.get_mut()) };
-
-        match future.poll(&mut ctx) {
-            Poll::Ready(_) => true,
-            Poll::Pending => false,
-        }
+        // let waker = unsafe { Waker::from_raw() };
+        // let mut ctx = Context::from_waker(&waker);
+        //
+        // // SAFETY: static future, no move
+        // let future = unsafe { Pin::new_unchecked(slot.future.get_mut()) };
+        //
+        // match future.poll(&mut ctx) {
+        //     Poll::Ready(_) => true,
+        //     Poll::Pending => false,
+        // }
+        todo!("TaskSlot::poll")
     }
 }
 impl<F: SafeFuture> StaticFuture<StaticCell<F>> {

@@ -1,12 +1,21 @@
 [package]
 name = "uefi-async"
-version = "0.1.5"
+version = "0.1.8"
 edition = "2024"
 
 [features]
 default = [ "alloc" ]
+
+# no-alloc
 static = [ "dep:static_cell", "dep:spin", "dep:num_enum" ]
 embassy-backend = [ "static", "dep:embassy-executor" ]
+edge-backend = [ "static", "dep:edge-executor" ]
+
+# nano-alloc
+nano-alloc = []
+cassette-backend = [ "nano-alloc", "dep:cassette" ]
+
+# alloc
 alloc = [ "uefi/alloc", "dep:st3" ]
 global-allocator = [ "alloc", "dep:spin", "dep:talc" ]
 nya = [ "global-allocator" ]
@@ -18,7 +27,11 @@ uefi-async-macros = { path = "../macros" }
 # no-alloc
 static_cell = { version = "2.1.1", optional = true }
 embassy-executor = { version = "0.9.1", optional = true }
+edge-executor = { version = "0.4.1", optional = true, default-features = false, features = ["portable-atomic", "critical-section"] }
 num_enum = { version = "0.7.5", optional = true, default-features = false, features = [ "complex-expressions" ] }
+
+# nano-alloc
+cassette = { version = "0.3.0", optional = true }
 
 # alloc
 st3 = { version = "0.4.1", optional = true }

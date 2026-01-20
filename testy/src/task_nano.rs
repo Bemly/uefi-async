@@ -1,3 +1,4 @@
+use alloc::boxed::Box;
 use core::ffi::c_void;
 use core::mem::transmute;
 use core::ptr::addr_of_mut;
@@ -5,22 +6,8 @@ use core::time::Duration;
 use uefi::boot::{create_event, get_handle_for_protocol, open_protocol_exclusive, stall, EventType, Tpl};
 use uefi::proto::pi::mp::MpServices;
 use uefi::Status;
-use uefi_async::no_alloc::task::{SafeFuture, TaskCapture, TaskFn, TaskPool, TaskPoolLayout};
-
-// use uefi_async_macros::ヽ;
-// use uefi_async_macros::ヽ as Caillo;
-// Ciallo～(∠・ω< )⌒☆
-
-// #[ヽ('ε')]
-// mod example_app {
-//     fn master_setup() {}
-//     fn agent_setup() {}
-//     fn agent_main() {}
-//     fn agent_idle() {}
-//     fn on_panic() {}
-//     fn on_error() {}
-//     fn on_exit() {}
-// }
+use uefi_async::nano_alloc::{Executor, TaskNode};
+use uefi_async::no_alloc::task::{SafeFuture, TaskCapture, TaskFn, TaskHeader, TaskPool, TaskPoolLayout};
 
 #[repr(C)]
 struct Context<'bemly_> {
@@ -28,30 +15,40 @@ struct Context<'bemly_> {
     pub num_cores: usize,
 }
 
+async fn calc_1() {
+    let mut i = 0;
+    i += 1;
+}
+
+async fn calc_2() {
+    let mut i = 0;
+    i -= 1;
+}
+
 extern "efiapi" fn process(arg: *mut c_void) {
     if arg.is_null() { return; }
     let ctx = unsafe { &mut *arg.cast::<Context>() };
 
     let core_id = ctx.mp.who_am_i().expect("Failed to get core ID");
+
+    let mut exec = Executor::new();
+
+    let fut1 = Box::pin(calc_1());
+    let mut fut1 = TaskNode::new(fut1, 0);
+    let fut2 = Box::pin(calc_2());
+    let mut fut2 = TaskNode::new(fut2, 60);
+
+
+
+    exec.add(&mut fut1);
+    exec.add(&mut fut2);
+
+
+    // exec.add(&mut fut1).add(&mut fut2).run();
 }
 
-#[doc(hidden)]
-fn __async_fun() -> impl Future<Output = ()> { ( move || async move {})() }
-fn async_fun() -> *mut TaskHeader {
-    const POOL_SIZE: usize = 4;
 
-    static POOL: TaskPoolLayout<{ TaskCapture::<_, _>::size::<POOL_SIZE>(__async_fun) }> = unsafe {
-        transmute(TaskCapture::<_,_>::new::<POOL_SIZE>(__async_fun))
-    };
-    const fn get<F, Args, Fut>(_: F) -> &'static TaskPool<Fut, POOL_SIZE>
-    where F: TaskFn<Args, Fut = Fut>, Fut: SafeFuture {
-        unsafe { &*POOL.get().cast() }
-    }
-    get(__async_fun).init(move || __async_fun())
-}
-
-
-pub fn template() -> Status {
+pub fn task() -> Status {
 
     let mp = get_handle_for_protocol::<MpServices>()
         .expect("Failed to get MP services");

@@ -12,6 +12,7 @@ use uefi::fs::FileSystem;
 use uefi::proto::pi::mp::MpServices;
 use uefi::{cstr16, println};
 use uefi_async::no_alloc::lifo::{Queue, Stealer, Worker};
+use uefi_async::no_alloc::task::TaskHeader;
 use uefi_async::util::{calc_freq_blocking, tick};
 
 const QUEUE_SIZE: usize = 1024;
@@ -80,7 +81,7 @@ extern "efiapi" fn process(arg: *mut c_void) {
     let duration_ticks = tps * 2;
     while tick() - start_tick < duration_ticks {
         for _ in 0..10 {
-            let _ = worker.push(ops as *mut ());
+            let _ = worker.push(ops as *mut TaskHeader);
             ops += 1;
         }
         let target_id = (core_id + 1) % ctx.num_cores;

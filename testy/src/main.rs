@@ -11,6 +11,7 @@ use uefi_async::global_allocator::alloc_init_wrapper;
 mod st3_benchmark;
 mod st3_patch_benchmark;
 mod task_v2;
+mod task_nano;
 // mod _template;
 
 #[entry]
