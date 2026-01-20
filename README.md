@@ -64,9 +64,8 @@ or more advanced usage:
 
 ```rust
 extern crate alloc;
-use uefi_async::nano_alloc::Executor;
+use uefi_async::nano_alloc::{Executor, add};
 use uefi_async::util::tick;
-use uefi_async_macros::add;
 
 async fn af1() {}
 async fn af2(_: usize) {}

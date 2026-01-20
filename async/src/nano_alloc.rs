@@ -4,6 +4,8 @@ use alloc::boxed::Box;
 use core::pin::Pin;
 use core::task::{Context, Poll, Waker};
 
+pub use uefi_async_macros::add;
+
 /// A node in a linked-list representing an asynchronous task.
 ///
 /// # Lifetimes

@@ -159,6 +159,4 @@ pub fn task(attr: TokenStream, item: TokenStream) -> TokenStream {
 }
 
 #[proc_macro]
-pub fn add(input: TokenStream) -> TokenStream {
-    nano::task(input.into()).into()
-}
+pub fn add(input: TokenStream) -> TokenStream { nano::task(input.into()).into() }

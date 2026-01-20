@@ -5,9 +5,8 @@ use core::time::Duration;
 use uefi::boot::{create_event, get_handle_for_protocol, open_protocol_exclusive, stall, EventType, Tpl};
 use uefi::proto::pi::mp::MpServices;
 use uefi::Status;
-use uefi_async::nano_alloc::{Executor, TaskNode};
+use uefi_async::nano_alloc::{Executor, TaskNode, add};
 use uefi_async::util::tick;
-use uefi_async_macros::add;
 
 #[repr(C)]
 struct Context<'bemly_> {
