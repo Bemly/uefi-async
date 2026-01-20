@@ -1,6 +1,7 @@
 #![warn(unreachable_pub)]
 
 mod task;
+mod nano;
 
 use proc_macro::TokenStream;
 use quote::{format_ident, quote};
@@ -155,4 +156,9 @@ fn init(item: TokenStream) -> TokenStream {
 #[proc_macro_attribute]
 pub fn task(attr: TokenStream, item: TokenStream) -> TokenStream {
     task::task(attr.into(), item.into()).into()
+}
+
+#[proc_macro]
+pub fn add(input: TokenStream) -> TokenStream {
+    nano::task(input.into()).into()
 }

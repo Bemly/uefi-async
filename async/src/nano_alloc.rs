@@ -1,70 +1,110 @@
 extern crate alloc;
 use crate::util::{calc_freq_blocking, tick};
-use core::hint::spin_loop;
+use alloc::boxed::Box;
 use core::pin::Pin;
 use core::task::{Context, Poll, Waker};
-use alloc::boxed::Box;
 
-pub struct TaskNode<'bemly_> {
-    future: Pin<Box<dyn Future<Output = ()> + 'bemly_>>,
+/// A node in a linked-list representing an asynchronous task.
+///
+/// # Lifetimes
+/// * `'curr`: The lifetime of the future's internal data.
+/// * `'next`: The lifetime of the reference to the next node in the list.
+///
+/// tip: `'curr` is longer than `'next`.
+pub struct TaskNode<'curr, 'next> {
+    /// The pinned asynchronous computation to be executed.
+    future: Pin<Box<dyn Future<Output = ()> + 'curr>>,
+    /// The execution interval, converted into hardware ticks.
     interval: u64,
+    /// The timestamp (in ticks) when this task should run again.
     next_run_time: u64,
-    // 指向链表中的下一个任务
-    next: Option<&'bemly_ mut TaskNode<'bemly_>>,
+    /// Link to the next task in the executor's chain.
+    next: Option<&'next mut TaskNode<'curr, 'next>>,
 }
-impl<'bemly_> TaskNode<'bemly_> {
-    pub fn new(future: Pin<Box<dyn Future<Output = ()> + 'bemly_>>, freq: u64) -> Self {
+impl<'curr, 'next> TaskNode<'curr, 'next> {
+    /// Creates a new `TaskNode` with a given future and frequency.
+    ///
+    /// Note: `freq` is initially the user-requested frequency and is
+    /// recalculated into an interval when added to an [`Executor`].
+    #[inline]
+    pub fn new(future: Pin<Box<dyn Future<Output = ()> + 'curr>>, freq: u64) -> Self {
         Self { future, interval: freq, next_run_time: 0, next: None }
     }
 }
 
-pub struct Executor<'bemly_> { head: Option<&'bemly_ mut TaskNode<'bemly_>>, freq: u64 }
+/// A simple round-robin executor that manages a linked-list of tasks.
+///
+/// The executor polls tasks based on their scheduled `next_run_time`
+/// and supports dynamic task addition.
+pub struct Executor<'curr, 'next> {
+    /// The head of the task linked-list.
+    head: Option<&'next mut TaskNode<'curr, 'next>>,
+    /// The hardware clock frequency, used to normalize task intervals.
+    freq: u64,
+}
 
-impl<'bemly_> Executor<'bemly_> {
-    pub fn new() -> Self { Self{ head: None, freq: calc_freq_blocking() } }
-    pub fn add(&mut self, node: &'bemly_ mut TaskNode<'bemly_>) -> &mut Self {
-        node.interval = self.freq / node.interval;
+impl<'curr, 'next> Executor<'curr, 'next> {
+    /// Initializes a new executor and calculates the hardware frequency.
+    #[inline]
+    pub fn new() -> Self {
+        Self{ head: None, freq: calc_freq_blocking() }
+    }
+
+    /// Adds a task node to the executor.
+    ///
+    /// This method converts the node's frequency into a tick interval
+    /// and pushes the node to the front of the linked-list.
+    #[inline]
+    pub fn add(&mut self, node: &'next mut TaskNode<'curr, 'next>) -> &mut Self {
+        // convert frequency (Hz) to interval (ticks)
+        node.interval = self.freq.checked_div(node.interval).unwrap_or(0);
+        // push to the front of the list
         node.next = self.head.take();
         self.head = Some(node);
         self
     }
 
-    pub fn run(&mut self) {
-        let mut cx = Context::from_waker(&Waker::noop());
+    /// Enters an infinite loop, continuously ticking the executor.
+    #[inline]
+    pub fn run_forever(&mut self) {
+        let mut cx = Self::init_step();
+        loop { self.run_step(tick(), &mut cx) }
+    }
 
-        loop {
-            let time = tick();
+    /// Initializes a no-op [`Context`] required for polling futures.
+    #[inline(always)]
+    pub fn init_step() -> Context<'curr> {
+        Context::from_waker(&Waker::noop())
+    }
 
-            // 获取 head 的可变引用，用于开始遍历
-            let mut cursor = &mut self.head;
+    /// Performs a single pass over all registered tasks.
+    ///
+    /// For each node:
+    /// 1. Checks if the current `time` has reached `next_run_time`.
+    /// 2. Polls the future.
+    /// 3. If `Ready`, the node is removed from the list.
+    /// 4. If `Pending`, the `next_run_time` is updated by the node's interval.
+    #[inline]
+    pub fn run_step(&mut self, time: u64, cx: &mut Context) {
+        let mut cursor = &mut self.head;
 
-            // 遍历链表
-            while let Some(node) = cursor {
-                if time >= node.next_run_time {
-
-                    // 2. Poll 异步任务
-                    match node.future.as_mut().poll(&mut cx) {
-                        Poll::Ready(_) => {
-                            *cursor = node.next.take();
-                            continue;
-                        }
-                        Poll::Pending => {
-                            // 任务未完成：更新下一次运行时间点
-                            node.next_run_time = time + node.interval;
-                        }
-                    }
+        // traverse the task list and poll each async task
+        while let Some(node) = cursor {
+            if time >= node.next_run_time {
+                match node.future.as_mut().poll(cx) {
+                    // remove it from the list by bridging the pointer when async finished.
+                    // it might miss the next one, but it's not a problem for polling.
+                    Poll::Ready(_) => *cursor = node.next.take(),
+                    // schedule next execution time
+                    Poll::Pending => node.next_run_time = time + node.interval,
                 }
-
-                // 3. 移动到下一个节点的引用槽位
-                // Re-borrow
-                cursor = match { cursor } {
-                    Some(node) => &mut node.next,
-                    None => break,
-                };
             }
 
-            // 这里的 spin_loop 放在整个链表轮询完一次之后
-            spin_loop();
+            // Re-borrow: not time to run yet, skip to next node
+            cursor = match { cursor } {
+                Some(node) => &mut node.next,
+                None => break,
+            };
         }
     }
 }

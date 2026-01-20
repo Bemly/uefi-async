@@ -3,7 +3,7 @@ use quote::{format_ident, quote};
 use syn::{ItemFn, ReturnType, Type, Visibility};
 
 
-pub(crate) fn task(attr: TokenStream, item: TokenStream) -> TokenStream {
+pub fn task(attr: TokenStream, item: TokenStream) -> TokenStream {
 
     let f: ItemFn = match syn::parse2(item.clone()) {
         Ok(x) => x,
