@@ -1,7 +1,15 @@
 [package]
 name = "uefi-async"
-version = "0.1.8"
-edition = "2024"
+authors.workspace = true
+categories.workspace = true
+keywords.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description.workspace = true
+version.workspace = true
+readme.workspace = true
 
 [features]
 default = [ "alloc" ]
@@ -22,7 +30,7 @@ nya = [ "global-allocator" ]
 
 [dependencies]
 uefi = "0.36.1"
-uefi-async-macros = { path = "../macros" }
+uefi-async-macros = { version = "0.2.0", path = "../macros" }
 
 # no-alloc
 static_cell = { version = "2.1.1", optional = true }

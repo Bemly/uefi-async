@@ -5,3 +5,15 @@ members = [
     "testy",
 ]
 resolver = "3"
+
+[workspace.package]
+authors = ["Bemly <bemly_@petalmail.com>"]
+categories = ["embedded", "asynchronous", "no-std"]
+keywords = ["uefi", "async", "executor", "embedded", "no_std"]
+edition = "2024"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/Bemly/uefi-async"
+homepage = "https://github.com/Bemly/uefi-async"
+description = "A lightweight asynchronous executor for UEFI environments."
+version = "0.2.0"
+readme = "README.md"
