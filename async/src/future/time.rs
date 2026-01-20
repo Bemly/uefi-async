@@ -1,6 +1,6 @@
-use core::pin::Pin;
-use core::task::{Context, Poll};
-use crate::util::tick;
+// use core::pin::Pin;
+// use core::task::{Context, Poll};
+// use crate::util::tick;
 
 pub struct Timeout<F> {
     future: F,
