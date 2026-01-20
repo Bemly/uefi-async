@@ -1,4 +1,5 @@
 #![warn(unreachable_pub)]
+#![cfg_attr(docsrs, feature(doc_cfg))]
 
 mod task;
 mod nano;

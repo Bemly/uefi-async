@@ -19,3 +19,9 @@ syn = { version = "2.0", features = ["full", "visit"] }
 quote = "1.0"
 proc-macro2 = "1.0"
 darling = "0.23.0"
+
+[package.metadata.docs.rs]
+default-target = "x86_64-unknown-uefi"
+targets = ["aarch64-unknown-uefi", "i686-unknown-uefi", "x86_64-unknown-uefi"]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
