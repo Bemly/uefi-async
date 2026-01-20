@@ -5,8 +5,9 @@ use core::time::Duration;
 use uefi::boot::{create_event, get_handle_for_protocol, open_protocol_exclusive, stall, EventType, Tpl};
 use uefi::proto::pi::mp::MpServices;
 use uefi::Status;
-use uefi_async::nano_alloc::{Executor, TaskNode, add};
-use uefi_async::tick;
+use uefi_async::nano_alloc::time::{Timeout, TimeoutExt, WaitTimer, WaitTimerBlockingExt};
+use uefi_async::nano_alloc::{add, Executor, TaskNode};
+use uefi_async::{calc_freq_blocking, tick, yield_now, Pacer, Skip, Yield, YIELD};
 
 #[repr(C)]
 struct Context<'bemly_> {
@@ -14,14 +15,27 @@ struct Context<'bemly_> {
     pub num_cores: usize,
 }
 
-async fn calc_1() {
-    let mut i = 0;
-    i += 1;
-}
+async fn calc_1() {}
 
 async fn calc_2() {
-    let mut i = 0;
-    i -= 1;
+    1.us().await;
+    500.ms().await;
+    YIELD.await;
+    Yield.await;
+    yield_now().await;
+    Skip(2).await;
+    WaitTimer::from_ms(500, calc_freq_blocking()).await;
+
+    match Timeout::new(calc_1(), 300).await { _ => () }
+    match calc_2().timeout(500).await { Ok(_) => {}, Err(_) => {} }
+
+    let mut pacer = Pacer::new(20);
+    loop {
+        pacer.burst(20).await;
+        pacer.throttle().await;
+        pacer.count_update(90).repeat().await;
+        pacer.step(10, true).await;
+    }
 }
 
 fn calc_sync(_core: usize) {}

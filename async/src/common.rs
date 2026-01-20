@@ -2,6 +2,7 @@
 pub mod tick;
 
 pub mod step;
+pub mod signal;
 
 pub use tick::*;
 pub use step::*;

@@ -31,8 +31,8 @@ pub struct Pacer {
     countdown: usize,
 }
 impl Pacer {
-    pub fn new(n: usize) -> Self { Pacer { count: n, countdown: n } }
-    pub fn count_update(&mut self, n: usize) -> &mut Self { self.count = n; self }
+    pub fn new(count: usize) -> Self { Pacer { count, countdown: count } }
+    pub fn count_update(&mut self, count: usize) -> &mut Self { self.count = count; self }
 
     /// 最通用的接口：满足 count 次条件后，执行指定的让出量
     #[inline]
