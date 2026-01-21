@@ -27,6 +27,7 @@ uefi = "0.36.1"
 uefi-async-macros = { version = "0.2.8", path = "../macros" }
 crossbeam = { version = "0.8.4", default-features = false }
 futures-concurrency = { version = "7.7.1", default-features = false }
+pin-project = "1.1.10"
 
 # no-alloc
 static_cell = { version = "2.1.1", optional = true }
@@ -43,7 +44,6 @@ st3 = { version = "0.4.1", optional = true }
 async-recursion = { version = "1.1.1", optional = true }
 talc = { version = "4.4.3", optional = true, default-features = false, features = ["lock_api"] }
 spin = { version = "0.10.0", features = ["lock_api"] }
-pin-project = "1.1.10"
 
 [package.metadata.docs.rs]
 default-target = "x86_64-unknown-uefi"
