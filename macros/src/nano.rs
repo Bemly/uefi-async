@@ -115,3 +115,174 @@ pub fn task(input: TokenStream) -> TokenStream {
         #(#declarations)*
     }
 }
+
+pub mod join {
+    use super::*;
+
+    struct JoinInput {
+        exprs: Punctuated<Expr, Token![,]>,
+    }
+
+    impl Parse for JoinInput {
+        fn parse(input: ParseStream) -> Result<Self> {
+            let exprs = Punctuated::parse_terminated(input)?;
+            Ok(JoinInput { exprs })
+        }
+    }
+
+    /// Joins multiple futures into a single future that runs them concurrently.
+    ///
+    /// This macro creates a nested `Join` or `TryJoin` structure at compile-time.
+    /// It is designed for futures that return `()` (for `join!`) or `Result<(), E>` (for `try_join!`).
+    ///
+    /// # Parameters
+    /// - `input`: A comma-separated list of future expressions.
+    /// - `is_try`: If true, uses `TryJoin` logic (short-circuits on error).
+    ///
+    /// # Behavior
+    /// 1. **Concurrency**: All passed futures are polled within the same executor step.
+    /// 2. **Completion**:
+    ///    - For `join!`, it resolves when **all** futures have resolved to `()`.
+    ///    - For `try_join!`, it resolves to `Err` as soon as any future fails, or `Ok(())` when all succeed.
+    /// 3. **Memory**: No heap allocation. The nested structure is stored in the task's stack frame.
+    ///
+    /// # Example
+    /// ```rust
+    /// // Concurrent side-effects
+    /// join!(print_heartbeat(), update_cursor()).await;
+    ///
+    /// // Fallible concurrent operations
+    /// try_join!(init_pci_bus(), load_kernel_file()).await?;
+    /// ```
+    pub fn join(input: TokenStream, is_try: bool) -> TokenStream {
+        let input = match parse2::<JoinInput>(input) {
+            Ok(res) => res,
+            Err(err) => return err.to_compile_error(),
+        };
+
+        let mut expr_list: Vec<Expr> = input.exprs.into_iter().collect();
+
+        if expr_list.is_empty() {
+            return quote! { async {} };
+        }
+
+        let tree = build_join_tree(&mut expr_list, is_try);
+
+        quote! { async move { #tree.await } }
+    }
+
+    /// Internal helper to recursively construct the `Join` or `TryJoin` tree.
+    ///
+    /// This ensures that the complexity of the future is handled by the compiler's
+    /// type system rather than a runtime list, maintaining Zero-Cost Abstraction.
+    fn build_join_tree(exprs: &mut Vec<Expr>, is_try: bool) -> TokenStream {
+        if exprs.len() == 1 {
+            let last = exprs.pop().unwrap();
+            return quote! { #last };
+        }
+
+        let head = exprs.remove(0);
+        let tail = build_join_tree(exprs, is_try);
+
+        let class = if is_try {
+            quote! { ::uefi_async::nano_alloc::control::single::join::TryJoin }
+        } else {
+            quote! { ::uefi_async::nano_alloc::control::single::join::Join  }
+        };
+
+        quote! {
+            #class {
+                head: #head,
+                tail: #tail,
+                head_done: false,
+                tail_done: false,
+            }
+        }
+    }
+
+    /// Joins multiple futures and collects their heterogeneous output into a flattened tuple.
+    ///
+    /// This macro solves the problem of awaiting multiple tasks that return different types.
+    /// It transforms a recursive `JoinAll` tree into a clean, flat tuple using pattern destructuring.
+    ///
+    /// # Constraints
+    /// All futures passed must implement `core::future::Future`.
+    ///
+    /// # Output
+    /// Returns a tuple `(T0, T1, T2, ...)` where `Tn` is the `Output` type of the `n-th` future.
+    ///
+    /// # Internal Mechanism
+    ///
+    /// The macro builds a nested structure like `JoinAll<F0, JoinAll<F1, F2>>`. Upon completion,
+    /// it generates a pattern match to extract values from the nested results:
+    /// `let (r0, (r1, r2)) = tree.await;` and returns `(r0, r1, r2)`.
+    ///
+    /// # Example
+    /// ```rust
+    /// let (video_info, buffer_ptr) = join_all!(get_gop_mode(), allocate_pool(size)).await;
+    /// // video_info is a ModeInfo, buffer_ptr is a *mut u8
+    /// ```
+    pub fn join_all(input: TokenStream) -> TokenStream {
+        let input = match parse2::<JoinInput>(input) {
+            Ok(res) => res,
+            Err(err) => return err.to_compile_error(),
+        };
+
+        let exprs: Vec<Expr> = input.exprs.into_iter().collect();
+        let count = exprs.len();
+
+        if count == 0 {
+            return quote! { async { () } };
+        }
+        if count == 1 {
+            let f = &exprs[0];
+            return quote! { async move { #f.await } };
+        }
+
+        let tree = build_join_all_tree(&exprs);
+
+        let res_idents: Vec<Ident> = (0..count)
+            .map(|i| format_ident!("__res_{}", i))
+            .collect();
+
+        let mut pattern = {
+            let last_ident = &res_idents[count - 1];
+            quote! { #last_ident }
+        };
+
+        for i in (0..count - 1).rev() {
+            let id = &res_idents[i];
+            let prev_pattern = pattern;
+            pattern = quote! { (#id, #prev_pattern) };
+        }
+
+        quote! {
+            async move {
+                let #pattern = #tree.await;
+                ( #(#res_idents),* )
+            }
+        }
+    }
+
+    /// Internal helper to recursively construct the `JoinAll` tree.
+    ///
+    /// This specifically handles the preservation of return types for each branch
+    /// by nesting `JoinAll` structs until a base case of two futures is reached.
+    fn build_join_all_tree(exprs: &[Expr]) -> TokenStream {
+        let count = exprs.len();
+        let head = &exprs[0];
+
+        if count == 2 {
+            let tail = &exprs[1];
+            return quote! {
+                ::uefi_async::nano_alloc::control::single::join::JoinAll::new(#head, #tail)
+            };
+        }
+
+        let tail_tree = build_join_all_tree(&exprs[1..]);
+
+        quote! {
+            ::uefi_async::nano_alloc::control::single::join::JoinAll::new(#head, #tail_tree)
+        }
+    }
+}

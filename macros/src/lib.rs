@@ -5,10 +5,9 @@ mod task;
 mod nano;
 
 use proc_macro::TokenStream;
-use quote::{format_ident, quote};
-use syn::{parse_macro_input, parse_quote, Error, FnArg, Item, ItemFn, ItemMod, Pat, Token};
-use syn::parse::{Parse, ParseStream};
+use quote::quote;
 use syn::spanned::Spanned;
+use syn::{parse_macro_input, parse_quote, Error, Item, ItemMod};
 
 fn _nya_attr_checker(attr: TokenStream) -> bool {
     // Lexical matching
@@ -176,3 +175,44 @@ pub fn task(attr: TokenStream, item: TokenStream) -> TokenStream {
 /// ```
 #[proc_macro]
 pub fn nano(input: TokenStream) -> TokenStream { nano::task(input.into()).into() }
+
+/// Joins multiple futures together, running them concurrently until all complete.
+///
+/// This macro expands to a nested `Join` structure. It does not return any values
+/// and is intended for tasks that perform side effects (returning `()`).
+///
+/// # Examples
+/// ```
+/// join!(task_one(), task_two(), async { do_something().await }).await;
+/// ```
+#[proc_macro]
+pub fn join(input: TokenStream) -> TokenStream { nano::join::join(input.into(), false).into() }
+
+/// Joins multiple `Result`-returning futures, short-circuiting on the first error.
+///
+/// If any future returns an `Err`, the `try_join!` completes immediately with that error.
+/// Otherwise, it waits until all tasks complete successfully.
+///
+/// # Examples
+/// ```
+/// let result = try_join!(disk_load(), network_fetch()).await;
+/// if result.is_err() {
+///     println!("One of the tasks failed!");
+/// }
+/// ```
+#[proc_macro]
+pub fn try_join(input: TokenStream) -> TokenStream { nano::join::join(input.into(), true).into() }
+
+/// Joins multiple futures and collects their results into a flattened tuple.
+///
+/// Unlike `join!`, `join_all!` preserves the output of each future. The macro
+/// automatically flattens the internal recursive structure so you receive a
+/// standard tuple of results.
+///
+/// # Examples
+/// ```
+/// let (mesh, texture) = join_all!(load_mesh(), load_texture()).await;
+/// render_engine.draw(mesh, texture);
+/// ```
+#[proc_macro]
+pub fn join_all(input: TokenStream) -> TokenStream { nano::join::join_all(input.into()).into() }

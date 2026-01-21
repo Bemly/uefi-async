@@ -1,13 +1,16 @@
+use uefi_async::nano_alloc::control::single::join;
 use alloc::boxed::Box;
+use alloc::vec;
 use core::ffi::c_void;
 use core::ptr::addr_of_mut;
 use core::time::Duration;
 use uefi::boot::{create_event, get_handle_for_protocol, open_protocol_exclusive, stall, EventType, Tpl};
 use uefi::proto::pi::mp::MpServices;
-use uefi::Status;
+use uefi::{println, Status};
 use uefi_async::nano_alloc::time::{Timeout, WaitTimer, _Timeout, _WaitTimer};
 use uefi_async::nano_alloc::{add, Executor, TaskNode};
 use uefi_async::{tick, yield_now, Pacer, Skip, Yield, YIELD};
+use uefi_async::nano_alloc::control::multiple::prelude::*;
 
 #[repr(C)]
 struct Context<'bemly_> {
@@ -16,6 +19,8 @@ struct Context<'bemly_> {
 }
 
 async fn calc_1() {}
+async fn init_fs() -> Result<(), ()> {Ok(())}
+async fn check_memory() -> Result<(), ()> {Ok(())}
 
 async fn calc_2() {
     WaitTimer::from_ms(500).await;
@@ -35,6 +40,30 @@ async fn calc_2() {
     match Timeout::new_pin(Box::pin(calc_2()), 500).await { _ => () }
     match Timeout::new(calc_1(), 300).await { _ => () }
     match calc_2().timeout(500).await { Ok(_) => {}, Err(_) => {} }
+
+    join!(calc_1(), calc_1(), calc_1(), calc_1(),calc_1(),calc_1(),calc_1(),calc_1(),calc_1(),calc_1()
+        ,calc_1(),calc_1(),calc_1(),calc_1(),calc_1(),calc_1(),calc_1(),calc_1(),calc_1(),calc_1()
+        ,calc_1(),calc_1(),calc_1(),calc_1(),calc_1(),calc_1(),calc_1()).await;
+    match try_join!(init_fs(), check_memory(), init_fs(), check_memory(), init_fs()).await {
+        Ok(()) => {},
+        Err(_) => {}
+    }
+    let (a, _, c, .. ) = join_all!(init_fs(), check_memory(), init_fs(), check_memory(), init_fs()).await;
+    match a { Ok(_) => {}, Err(_) => {} }; if c.is_ok() { _ = c.unwrap(); }
+
+    [calc_1(), calc_1(), calc_1(), calc_1(),calc_1(),calc_1(),calc_1(),calc_1(),calc_1(),calc_1(),
+        calc_1(),calc_1(),calc_1(),calc_1(),calc_1(),calc_1(),calc_1(),calc_1(),calc_1(),calc_1(),
+        calc_1(),calc_1(),calc_1(),calc_1(),calc_1(),calc_1(),calc_1(),calc_1(),calc_1(),calc_1(),
+        calc_1(),calc_1(),calc_1(),calc_1(),calc_1(),calc_1(),calc_1()].join().await;
+    vec![calc_1(), calc_1(), calc_1(), calc_1()].join().await;
+    match (init_fs(), check_memory(), init_fs(), check_memory(), init_fs(), check_memory(), init_fs(),
+     check_memory(), init_fs(), check_memory(), init_fs(), check_memory(), init_fs(), check_memory(),
+     init_fs()).try_join().await {
+        Ok(((), (), (), (), (), (), (), (), (), (), (), (), mem, fs, _)) => {},
+        Err(_) => {},
+    }
+
+
 
     let mut pacer = Pacer::new(20);
     loop {

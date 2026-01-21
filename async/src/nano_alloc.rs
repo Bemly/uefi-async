@@ -8,6 +8,7 @@ pub use executor::Executor;
 pub mod time;
 pub mod uefi;
 pub mod channel;
+pub mod control;
 
 /// Procedural macro logic to initialize and register task nodes to executors.
 ///
