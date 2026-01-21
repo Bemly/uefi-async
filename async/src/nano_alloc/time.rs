@@ -3,7 +3,13 @@ use alloc::boxed::Box;
 use core::pin::Pin;
 use core::task::{Context, Poll};
 
-/// Usage:
+/// A wrapper that adds a time limit to a `Future`.
+///
+/// If the internal future does not complete before the deadline (in hardware ticks),
+/// it returns `Err(())`. Otherwise, it returns `Ok(Output)`.
+///
+/// # Examples
+///
 /// ```rust,no_run
 /// use uefi_async::nano_alloc::time::Timeout;
 ///
@@ -21,11 +27,17 @@ pub struct Timeout<'bemly_, Content> {
 }
 
 impl<'bemly_, Content> Timeout<'bemly_, Content> {
+    /// Creates a new `Timeout` by pinning the provided future to the heap.
+    ///
+    /// `ticks` is the relative duration from the current time.
     #[inline]
     pub fn new(future: impl Future<Output = Content> + 'bemly_, ticks: u64) -> Self {
         Self { future: Box::pin(future), deadline: tick().saturating_add(ticks) }
     }
 
+    /// Creates a new `Timeout` from an already pinned future.
+    ///
+    /// Useful when the future is already boxed or has a complex lifetime.
     #[inline(always)]
     pub fn new_pin(future: Pin<Box<dyn Future<Output = Content> + 'bemly_>>, ticks: u64) -> Self {
         Self { future, deadline: tick().saturating_add(ticks) }
@@ -33,59 +45,86 @@ impl<'bemly_, Content> Timeout<'bemly_, Content> {
 }
 
 impl<'bemly_, Content> Future for Timeout<'bemly_, Content> {
+    /// Returns `Ok(T)` if finished in time, or `Err(())` if the deadline is exceeded.
     type Output = Result<Content, ()>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
+        // Check if the current hardware tick has passed the deadline
         if tick() >= self.deadline { return Poll::Ready(Err(())) }
 
-        // 这里的 self.future 本身就是 Pin 过的，直接调用 poll 即可
+        // Poll the inner pinned future
         match self.future.as_mut().poll(cx) {
             Poll::Ready(val) => Poll::Ready(Ok(val)),
             Poll::Pending => Poll::Pending,
         }
     }
 }
+/// An extension trait to provide the `.timeout()` method for all `Future` types.
 pub trait _Timeout<'bemly_>: Future + Sized {
+    /// Wraps the future in a `Timeout` with the specified duration in hardware ticks.
     fn timeout(self, duration_ticks: u64) -> Timeout<'bemly_, Self::Output> where Self: 'bemly_ {
         Timeout::new(self, duration_ticks)
     }
 }
 impl<F: Future + Sized> _Timeout<'_> for F {}
 
+/// A high-precision asynchronous timer based on hardware ticks.
 ///
-/// Usage:
+/// `WaitTimer` leverages the CPU's Time Stamp Counter (TSC) to provide non-blocking
+/// delays ranging from picoseconds to years. It implements the [`Future`] trait,
+/// allowing the executor to suspend tasks until the specified hardware deadline is reached.
+///
+/// # Precision and Accuracy
+/// The timer relies on the calibrated frequency stored in `FREQ`. Accuracy is
+/// determined by the sampling quality during `init_clock_freq()`.
+///
+/// # Examples
+///
+/// Using the builder-style methods:
 /// ```rust,no_run
-/// use uefi_async::nano_alloc::time::{WaitTimer, _WaitTimer};
-/// async fn blink_led_task(cpu_freq: u64) {
-///     loop {
-///         set_led(true);
-///         2.year().await;
-///         5.day().await;
-///         1.mins().await;
-///         80.ps().await;
-///         1.us().await;
-///         500.ms().await;
-///         20.fps().await;
-///         set_led(false);
-///         WaitTimer::from_ms(500).await;
-///     }
+/// async fn delay_example() {
+///     // Create a timer for 500 milliseconds
+///     WaitTimer::from_ms(500).await;
 /// }
 /// ```
 ///
+/// Using the [`_WaitTimer`] extension trait for a more expressive DSL:
+/// ```rust,no_run
+/// use uefi_async::nano_alloc::time::{WaitTimer, _WaitTimer};
+///
+/// async fn blink_led_task() {
+///     loop {
+///         // Highly readable duration syntax
+///         1.s().await;        // Wait 1 second
+///         500.ms().await;     // Wait 500 milliseconds
+///         20.fps().await;     // Wait for 1 frame duration at 20 FPS (50ms)
+///
+///         // Precise sub-microsecond timing
+///         10.us().await;      // 10 microseconds
+///         80.ps().await;      // 80 picoseconds (Note: Dependent on CPU Ghz)
+///
+///         // Long-term scheduling
+///         2.hour().await;
+///         1.day().await;
+///     }
+/// }
+/// ```
 #[derive(Debug)]
 pub struct WaitTimer(u64);
 
 impl WaitTimer {
-    /// 核心构造函数：传入目标截止时间（tick）
+    /// Constructs a timer that expires at an absolute hardware tick count.
     #[inline(always)]
     pub fn until(deadline: u64) -> Self { Self(deadline) }
 
-    /// 基于当前 tick 增加偏移量
+    /// Constructs a timer that expires after a relative number of ticks from now.
     #[inline(always)]
     pub fn after(ticks_to_wait: u64) -> Self { Self(tick().wrapping_add(ticks_to_wait)) }
 
-    /// 使用 wrapping_sub 处理计数器回绕问题
-    /// 如果当前时间减去截止时间的结果 > 一半的 u64 范围，说明截止时间还没到
+    /// Checks if the current hardware tick has reached or exceeded the deadline.
+    ///
+    /// This uses a direct comparison, assuming the timer is polled frequently
+    /// enough to handle 64-bit tick overflows (which take centuries on modern CPUs).
     #[inline(always)]
     pub fn is_expired(&self) -> bool { tick() >= self.0 }
 
@@ -134,59 +173,66 @@ impl Future for WaitTimer {
     }
 }
 
-pub trait _WaitTimer {
-    fn year(self) -> WaitTimer;
-    fn month(self) -> WaitTimer;
-    fn week(self) -> WaitTimer;
-    fn day(self) -> WaitTimer;
-    fn hour(self) -> WaitTimer;
-    fn mins(self) -> WaitTimer;
-    fn s(self) -> WaitTimer;
-    fn hz(self) -> WaitTimer;
-    fn ms(self) -> WaitTimer;
-    fn us(self) -> WaitTimer;
-    fn ns(self) -> WaitTimer;
-    fn ps(self) -> WaitTimer;
-    fn fps(self) -> WaitTimer;
+/// Extension trait providing a fluent API for creating [`WaitTimer`] instances
+/// directly from unsigned 64-bit integers.
+///
+/// This trait is exclusively implemented for `u64` to ensure stable type inference
+/// when using numeric literals (e.g., `500.ms().await`).
+pub trait _WaitTimer: Into<u64> + Sized {
+    /// Creates a timer for the specified number of years.
+    #[inline(always)]
+    fn year(self) -> WaitTimer { WaitTimer::from_year(self.into()) }
+
+    /// Creates a timer for the specified number of months.
+    #[inline(always)]
+    fn month(self) -> WaitTimer { WaitTimer::from_month(self.into()) }
+
+    /// Creates a timer for the specified number of weeks.
+    #[inline(always)]
+    fn week(self) -> WaitTimer { WaitTimer::from_week(self.into()) }
+
+    /// Creates a timer for the specified number of days.
+    #[inline(always)]
+    fn day(self) -> WaitTimer { WaitTimer::from_day(self.into()) }
+
+    /// Creates a timer for the specified number of hours.
+    #[inline(always)]
+    fn hour(self) -> WaitTimer { WaitTimer::from_hour(self.into()) }
+
+    /// Creates a timer for the specified number of minutes.
+    #[inline(always)]
+    fn mins(self) -> WaitTimer { WaitTimer::from_min(self.into()) }
+
+    /// Creates a timer for the specified number of seconds.
+    #[inline(always)]
+    fn s(self) -> WaitTimer { WaitTimer::from_s(self.into()) }
+
+    /// Creates a timer based on Frequency (Hz).
+    /// Represented as the period: 1 second / frequency.
+    #[inline(always)]
+    fn hz(self) -> WaitTimer { WaitTimer::from_s(self.into()) }
+
+    /// Creates a timer for the specified number of milliseconds (10^-3 s).
+    #[inline(always)]
+    fn ms(self) -> WaitTimer { WaitTimer::from_ms(self.into()) }
+
+    /// Creates a timer for the specified number of microseconds (10^-6 s).
+    #[inline(always)]
+    fn us(self) -> WaitTimer { WaitTimer::from_us(self.into()) }
+
+    /// Creates a timer for the specified number of nanoseconds (10^-9 s).
+    #[inline(always)]
+    fn ns(self) -> WaitTimer { WaitTimer::from_ns(self.into()) }
+
+    /// Creates a timer for the specified number of picoseconds (10^-12 s).
+    #[inline(always)]
+    fn ps(self) -> WaitTimer { WaitTimer::from_ps(self.into()) }
+
+    /// Creates a timer based on Frames Per Second (FPS).
+    /// Used for synchronizing game loops or rendering intervals.
+    #[inline(always)]
+    fn fps(self) -> WaitTimer { WaitTimer::from_fps(self.into()) }
 }
-
-impl _WaitTimer for u64 {
-    #[inline(always)]
-    fn year(self) -> WaitTimer { WaitTimer::from_year(self) }
-
-    #[inline(always)]
-    fn month(self) -> WaitTimer { WaitTimer::from_month(self) }
-
-    #[inline(always)]
-    fn week(self) -> WaitTimer { WaitTimer::from_week(self) }
-
-    #[inline(always)]
-    fn day(self) -> WaitTimer { WaitTimer::from_day(self) }
-
-    #[inline(always)]
-    fn hour(self) -> WaitTimer { WaitTimer::from_hour(self) }
-
-    #[inline(always)]
-    fn mins(self) -> WaitTimer { WaitTimer::from_min(self) }
-
-    #[inline(always)]
-    fn s(self) -> WaitTimer { WaitTimer::from_s(self) }
-
-    #[inline(always)]
-    fn hz(self) -> WaitTimer { WaitTimer::from_s(self) }
-
-    #[inline(always)]
-    fn ms(self) -> WaitTimer { WaitTimer::from_ms(self) }
-
-    #[inline(always)]
-    fn us(self) -> WaitTimer { WaitTimer::from_us(self) }
-
-    #[inline(always)]
-    fn ns(self) -> WaitTimer { WaitTimer::from_ns(self) }
-
-    #[inline(always)]
-    fn ps(self) -> WaitTimer { WaitTimer::from_ps(self) }
-
-    #[inline(always)]
-    fn fps(self) -> WaitTimer { WaitTimer::from_fps(self) }
-}
+/// Implement only for u64 to provide a concrete base for numeric literals.
+/// Only one primitive type is allowed; otherwise, the rustc_infer cannot deduce it.
+impl _WaitTimer for u64 {}

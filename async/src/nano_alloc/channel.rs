@@ -7,6 +7,7 @@ use core::pin::Pin;
 use core::task::{Context, Poll};
 use crossbeam::queue::{ArrayQueue, SegQueue};
 use spin::Mutex;
+use crate::Yield;
 
 pub mod single {
     use super::*;
@@ -14,46 +15,56 @@ pub mod single {
     pub mod oneshot {
         use super::*;
 
-        /// A oneshot channel
-        /// Single-core, multi-asynchronous
+        /// A synchronization primitive for sending a single value between asynchronous tasks.
         ///
-        /// Usage:
-        /// ```rust,no_run
-        /// async fn sender() {
-        ///     let result = perform_heavy_calc();
-        ///     tx.send(result); // 发送数据
-        /// }
+        /// This channel is specifically designed for **single-core, multi-asynchronous** environments
+        /// such as UEFI applications. It allows one task to provide a value (the Sender) and
+        /// another task to asynchronously wait for that value (the Receiver).
+        ///
+        /// Since the environment is single-threaded, it utilizes `Rc<RefCell<Option<T>>>`
+        /// instead of atomic primitives to maintain low overhead and `no_std` compatibility.
+        ///
+        /// # Examples
+        ///
+        /// ```rust
         /// async fn example() {
-        ///     // 1. 创建一对通信端点
-        ///     let (tx, rx) = Oneshot::<u64>::new();
+        ///     // 1. Create a channel pair
+        ///     let (tx, rx) = oneshot::new::<u64>();
         ///
-        ///     // 2. 将发送端交给某个异步任务（比如后台加载）
-        ///     join!(Box::pin(sender())); // TODO: join macro
-        ///
-        ///     // 3. 接收端在另一个任务中等待
-        ///     // 在数据到达前，这行代码会返回 Poll::Pending，让出 CPU
+        ///     // 2. The Receiver waits for data without blocking the entire system
+        ///     // In a real scenario, tx would be moved into a separate TaskNode
         ///     let data = rx.await;
         ///
-        ///     // 4. 数据到达后，代码继续执行
-        ///     println!("Received: {}", data);
+        ///     // 3. Data is received and execution resumes
         /// }
         /// ```
         #[derive(Debug)]
         pub struct Oneshot<Data> (Rc<RefCell<Option<Data>>>);
+        /// A future that resolves to the value sent by the corresponding [`Sender`].
         #[derive(Debug)]
         pub struct OneShotReceiver<Data> (Rc<RefCell<Option<Data>>>);
 
         impl<Data> Oneshot<Data> {
+            /// Creates a new oneshot channel, returning the sender/receiver halves.
+            ///
+            /// All data sent via the [`Sender`] will become available to the [`Receiver`].
             pub fn new() -> (Self, OneShotReceiver<Data>) {
                 let data = Rc::new(RefCell::new(None));
                 (Self(data.clone()), OneShotReceiver(data))
             }
-
+            /// Completes the channel by sending a value.
+            ///
+            /// This consumes the sender, as only one value can ever be sent.
             pub fn send(self, value: Data) { *self.0.borrow_mut() = Some(value) }
         }
 
         impl<Data> Future for OneShotReceiver<Data> {
             type Output = Data;
+            /// Polls the receiver to check if the value has been sent.
+            ///
+            /// If the value is present, it returns [`Poll::Ready`].
+            /// Otherwise, it returns [`Poll::Pending`], allowing the executor to
+            /// switch to other tasks (cooperative multitasking).
             fn poll(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Data> {
                 match self.0.borrow_mut().take() {
                     Some(val) => Poll::Ready(val),
@@ -66,43 +77,69 @@ pub mod single {
     pub mod unbounded_channel {
         use super::*;
 
-        /// Single-core, multi-asynchronous
+        /// A Single-Core, Multi-Producer, Single-Consumer (MPSC) asynchronous channel.
         ///
-        /// MPSC
+        /// This channel is designed for single-core, multi-asynchronous environments
+        /// typical in UEFI systems. It allows multiple senders to push data into a
+        /// shared queue, while a single receiver waits for and consumes that data asynchronously.
         ///
-        /// Usage:
+        /// # Features
+        /// * **Unbounded Capacity**: The queue grows dynamically (powered by `VecDeque`).
+        /// * **Non-blocking Sending**: Sending is an immediate, synchronous operation.
+        /// * **Asynchronous Receiving**: The receiver implements [`Future`], returning
+        ///   `Poll::Pending` when empty and `Poll::Ready(Data)` when data arrives.
+        ///
+        /// # Examples
+        ///
         /// ```rust,no_run
+        /// // Main logic consuming events
         /// async fn main_logic(mut rx: ChannelReceiver<KeyEvent>) {
         ///     loop {
-        ///         // 当队列为空时，这里会自动 Pending，让出 CPU
-        ///         // 当有数据时，这里会被 Ready 激活
+        ///         // If the queue is empty, .await will yield control back to the executor (Pending).
+        ///         // Once data is pushed by a sender, the task is re-polled and returns Ready.
         ///         let key = rx.await;
         ///         match key {
-        ///             KeyEvent::ScanCode(0x01) => break, // ESC 键退出
+        ///             KeyEvent::ScanCode(0x01) => break, // Exit on ESC key
         ///             _ => render_game(key),
         ///         }
         ///     }
         /// }
-        /// // 在另一个异步任务中
+        ///
+        /// // Input task producing events
         /// async fn input_poller(tx: ChannelSender<KeyEvent>) {
         ///     loop {
         ///         if let Some(key) = poll_uefi_key() {
+        ///             // Synchronously push data into the channel
         ///             tx.send(key);
         ///         }
-        ///         Yield.await; // 给主逻辑运行的机会
+        ///         // Yield execution to allow the main_logic or other tasks to run
+        ///         Yield.await;
         ///     }
         /// }
         /// ```
+        pub fn channel<Data>() -> (ChannelSender<Data>, ChannelReceiver<Data>) {
+            let queue = Rc::new(RefCell::new(VecDeque::new()));
+            (ChannelSender(queue.clone()), ChannelReceiver(queue))
+        }
+
         #[derive(Clone, Debug)]
         pub struct ChannelSender<Data> (Rc<RefCell<VecDeque<Data>>>);
         #[derive(Debug)]
         pub struct ChannelReceiver<Data> (Rc<RefCell<VecDeque<Data>>>);
         impl<Data> ChannelSender<Data> {
-            /// 发送数据到通道
+            /// Sends a value into the channel.
+            ///
+            /// Since this is an unbounded channel, this operation is synchronous and
+            /// will not block the current task.
             pub fn send(&self, value: Data) { self.0.borrow_mut().push_back(value); }
         }
         impl<Data> Future for ChannelReceiver<Data> {
             type Output = Data;
+            /// Polls the channel for the next available piece of data.
+            ///
+            /// Returns [`Poll::Ready(value)`] if the queue contains data.
+            /// Returns [`Poll::Pending`] if the queue is empty, signaling the executor
+            /// to switch to another task until the next polling cycle.
             fn poll(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Self::Output> {
                 match self.0.borrow_mut().pop_front() {
                     Some(value) => Poll::Ready(value),
@@ -110,58 +147,81 @@ pub mod single {
                 }
             }
         }
-        /// 创建一个不限容量的异步通道 (Unbounded Channel)
-        pub fn channel<Data>() -> (ChannelSender<Data>, ChannelReceiver<Data>) {
-            let queue = Rc::new(RefCell::new(VecDeque::new()));
-            (ChannelSender(queue.clone()), ChannelReceiver(queue))
-        }
+
 
     }
 
     pub mod bounded_channel {
         use super::*;
-        /// Single-core, multi-asynchronous
+
+        /// A lightweight, single-core, multi-producer single-consumer (MPSC) asynchronous channel.
         ///
-        /// Usage:
+        /// This channel is specifically designed for single-threaded executors (like those in UEFI).
+        /// It allows asynchronous tasks to communicate without the need for complex synchronization
+        /// primitives like Mutex or Atomic types, leveraging the non-preemptive nature of the executor.
+        ///
+        /// # Safety
+        /// This implementation uses raw pointers. It is safe **only** within a single-threaded
+        /// executor where the `Receiver` is guaranteed to outlive all `Sender` instances,
+        /// or where the `Sender` is not used after the `Receiver` is dropped.
+        ///
+        /// # Example
         /// ```rust,no_run
-        /// // 1. 创建一个容量为 32 的按键通道
+        /// // 1. Create a channel for keyboard events with a capacity of 32
         /// let (tx, mut rx) = bounded_channel::<Key>(32);
         ///
         /// add!(
-        ///     // 任务 A: 生产者 (采样频率高，比如 100Hz)
         ///     executor => {
+        ///         // Task A: Producer - Polls hardware at a high frequency (e.g., 100Hz)
         ///         100 -> async move {
         ///             loop {
         ///                 if let Some(key) = poll_keyboard() {
-        ///                     tx.send(key); // 发送按键到通道
+        ///                     tx.send(key); // Non-blocking send
         ///                 }
         ///                 Yield.await;
         ///             }
         ///         },
         ///
-        ///         // 任务 B: 消费者 (根据游戏逻辑处理按键)
-        ///         executor => {
-        ///             0 -> async move {
-        ///                 loop {
-        ///                     // await 会在队列为空时自动挂起当前任务
-        ///                     // 当上面的生产者 send 后，下一轮 poll 就能拿到数据
-        ///                     let key = (&mut rx).await;
-        ///                     process_key(key);
-        ///                 }
+        ///         // Task B: Consumer - Processes game logic
+        ///         0 -> async move {
+        ///             loop {
+        ///                 // The await point suspends the task if the queue is empty.
+        ///                 // Execution resumes as soon as the producer sends data
+        ///                 // and the executor polls this task again.
+        ///                 let key = (&mut rx).await;
+        ///                 process_game_logic(key);
         ///             }
         ///         }
         ///     }
         /// );
         /// ```
+        pub fn channel<Data>(capacity: usize) -> (UnsafeChannelSender<Data>, UnsafeChannelReceiver<Data>) {
+            let mut inner = Box::new(ChannelInner(VecDeque::with_capacity(capacity)));
+            let sender_ptr = &mut *inner as *mut ChannelInner<Data>;
+
+            (UnsafeChannelSender(sender_ptr), UnsafeChannelReceiver(inner))
+        }
+
         #[derive(Debug)]
         struct ChannelInner<Data> (VecDeque<Data>);
+        /// Handle to send data into the channel.
+        ///
+        /// Can be cloned to allow multiple producers to send data to a single receiver.
         #[derive(Clone, Debug)]
         pub struct UnsafeChannelSender<Data> (*mut ChannelInner<Data>);
+        /// Handle to receive data from the channel.
+        ///
+        /// Implements [`Future`], yielding data when the internal queue is not empty.
         #[derive(Debug)]
         pub struct UnsafeChannelReceiver<Data> (Box<ChannelInner<Data>>);
         impl<Data> UnsafeChannelSender<Data> {
+            /// Sends a value into the channel.
+            ///
+            /// This operation is non-blocking and assumes the internal buffer has
+            /// enough capacity or can grow dynamically.
             pub fn send(&self, value: Data) {
-                // 安全说明：在单线程 Executor 下，Receiver 保证 inner 指针有效
+                // Safety: In a single-core Executor, the Receiver owns the Box.
+                // As long as the Executor holds the tasks, the inner pointer remains valid.
                 unsafe { (*self.0).0.push_back(value) }
             }
         }
@@ -174,12 +234,7 @@ pub mod single {
                 }
             }
         }
-        pub fn channel<Data>(capacity: usize) -> (UnsafeChannelSender<Data>, UnsafeChannelReceiver<Data>) {
-            let mut inner = Box::new(ChannelInner(VecDeque::with_capacity(capacity)));
-            let sender_ptr = &mut *inner as *mut ChannelInner<Data>;
 
-            (UnsafeChannelSender(sender_ptr), UnsafeChannelReceiver(inner))
-        }
 
     }
 }
@@ -190,39 +245,55 @@ pub mod multiple {
     pub mod oneshot {
         use super::*;
 
-        /// Multi-core, multi-asynchronous
+        /// A multi-core, synchronization-safe communication primitive for sending a single value
+        /// between asynchronous tasks.
         ///
-        /// Usage:
-        /// ```rust,no_run
-        /// // 假设 Core 0 负责渲染，Core 1 负责物理
-        /// let (tx, rx) = MultiCoreOneshot::new();
+        /// This implementation uses an `Arc<Mutex<Option<T>>>` internally, making it suitable
+        /// for cross-core communication in multi-processor UEFI environments where tasks
+        /// in different executors need to synchronize data.
         ///
-        /// // Core 1 的调度器中运行的任务
-        /// async core_1() {
+        /// # Usage
+        ///
+        /// ```rust
+        /// // Example: Multi-core synchronization
+        /// // Core 1 performs heavy physics while Core 0 handles rendering.
+        /// let (tx, rx) = Oneshot::new();
+        ///
+        /// // Inside Core 1's executor:
+        /// async move {
         ///     let result = heavy_physics_calculation();
-        ///     tx.send(result);
-        /// }
+        ///     tx.send(result); // Signal completion and send data
+        /// };
         ///
-        /// // Core 0 的调度器中运行的任务
-        /// async core_2() {
-        ///     let data = rx.await; // 这里会 Pending 直到 Core 1 完成
+        /// // Inside Core 0's executor:
+        /// async move {
+        ///     let data = rx.await; // Suspends execution until Core 1 sends the data
         ///     update_gpu_buffer(data);
-        /// }
+        /// };
         /// ```
         #[derive(Debug)]
         pub struct Oneshot<Data>(Arc<Mutex<Option<Data>>>);
 
+        /// The receiving half of the [`Oneshot`] channel.
+        ///
+        /// This struct implements [`Future`], allowing it to be `.await`ed until
+        /// the sender provides a value.
         #[derive(Debug)]
         pub struct OneShotReceiver<Data>(Arc<Mutex<Option<Data>>>);
 
         impl<Data> Oneshot<Data> {
-            /// 创建一对多核安全的 Oneshot 通道
+            /// Creates a new multi-core safe Oneshot channel pair.
+            ///
+            /// Returns a sender ([`Oneshot`]) and a receiver ([`OneShotReceiver`]).
             pub fn new() -> (Self, OneShotReceiver<Data>) {
                 let data = Arc::new(Mutex::new(None));
                 (Self(data.clone()), OneShotReceiver(data))
             }
 
-            /// 发送数据。由于使用了 Arc 和 Mutex，这可以跨核调用。
+            /// Consumes the sender and provides a value to the receiver.
+            ///
+            /// Since this involves an `Arc` and a `Mutex`, it can be safely called
+            /// from a different CPU core than the receiver.
             pub fn send(self, value: Data) {
                 let mut lock = self.0.lock();
                 *lock = Some(value);
@@ -232,8 +303,12 @@ pub mod multiple {
         impl<Data> Future for OneShotReceiver<Data> {
             type Output = Data;
 
+            /// Polls the receiver to check if data has been sent.
+            ///
+            /// Returns [`Poll::Ready`] if the data is available, otherwise returns
+            /// [`Poll::Pending`] and yields control back to the executor.
             fn poll(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Self::Output> {
-                // 尝试获取锁并提取数据
+                // Attempt to acquire the lock and extract the data
                 let mut lock = self.0.lock();
                 match lock.take() {
                     Some(val) => Poll::Ready(val),
@@ -247,51 +322,72 @@ pub mod multiple {
     pub mod unbounded_channel {
         use super::*;
 
-        /// Multi-core, multi-asynchronous
+        /// A lock-free, multi-core safe asynchronous channel for inter-task communication.
         ///
-        /// Usage:
+        /// This channel is designed for high-performance scenarios where data needs to be
+        /// transferred between different executor instances running on different CPU cores.
+        /// It utilizes an atomic `SegQueue` to ensure that `send` operations are non-blocking
+        /// and `poll` operations are thread-safe.
+        ///
+        /// # Architecture
+        ///
+        /// The channel consists of a [`ChannelSender`] and a [`ChannelReceiver`].
+        /// The sender performs atomic push operations, while the receiver acts as a
+        /// [`Future`], yielding control back to the executor if the queue is empty.
+        ///
+        /// # Usage
+        ///
         /// ```rust,no_run
-        /// // 示例：CPU 0 负责处理复杂的 GOP 渲染逻辑，计算完后把 UI 顶点数据发给 CPU 1 绘图
-        /// let (tx, rx) = multi_core_unbounded_channel::<VertexData>();
+        /// // Example: Producer task on Core 1, Consumer task on Core 0
+        /// let (tx, rx) = unbounded_channel::channel::<PhysicsResult>();
         ///
-        /// // 在 CPU 0 的 Executor 任务中
-        /// executor0.add(async move {
-        ///     let data = compute_ui();
-        ///     tx.send(data); // 瞬间完成，不阻塞渲染
-        /// });
+        /// // Task running on Core 1's executor
+        /// async fn producer(tx: ChannelSender<PhysicsResult>) {
+        ///     let result = heavy_physics_calculation();
+        ///     tx.send(result); // Non-blocking atomic push
+        /// }
         ///
-        /// // 在 CPU 1 的 Executor 任务中
-        /// executor1.add(async move {
-        ///     loop {
-        ///         let vertex = rx.await; // 如果没数据，CPU 1 会去跑其他任务，不会卡死
-        ///         render_to_screen(vertex);
-        ///     }
-        /// });
+        /// // Task running on Core 0's executor
+        /// async fn consumer(rx: ChannelReceiver<PhysicsResult>) {
+        ///     // This will return Poll::Pending and yield CPU if the queue is empty,
+        ///     // allowing the executor to run other tasks (like UI rendering).
+        ///     let data = rx.await;
+        ///     update_gpu_buffer(data);
+        /// }
         /// ```
-        #[derive(Clone, Debug)]
-        pub struct ChannelSender<Data>(Arc<SegQueue<Data>>);
-        #[derive(Debug)]
-        pub struct ChannelReceiver<Data>(Arc<SegQueue<Data>>);
-
-        /// 创建一个多核安全的无锁异步通道
         pub fn channel<Data>()
             -> (ChannelSender<Data>, ChannelReceiver<Data>) {
             let queue = Arc::new(SegQueue::new());
             (ChannelSender(queue.clone()), ChannelReceiver(queue))
         }
 
+        #[derive(Clone, Debug)]
+        pub struct ChannelSender<Data>(Arc<SegQueue<Data>>);
+        #[derive(Debug)]
+        pub struct ChannelReceiver<Data>(Arc<SegQueue<Data>>);
+
         impl<Data> ChannelSender<Data> {
-            /// 极其高效的入队操作，仅需一次 Atomic CAS
+            /// Sends a value into the channel.
+            ///
+            /// This operation is extremely efficient, typically requiring only a
+            /// single Atomic CAS (Compare-And-Swap) without acquiring any locks.
             #[inline(always)]
             pub fn send(&self, value: Data) { self.0.push(value) }
         }
 
         impl<Data> Future for ChannelReceiver<Data> {
             type Output = Data;
+
+            /// Polls the receiver for a value.
+            ///
+            /// Returns [`Poll::Ready(Data)`] if a value is available in the queue.
+            /// Returns [`Poll::Pending`] if the queue is empty, suspending the
+            /// current async task until the next executor tick.
             #[inline]
             fn poll(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Self::Output> {
-                // SegQueue 的 pop 是线程安全的且无锁
-                // 在多核调度器中，如果队列为空，我们返回 Pending 让出当前核的 CPU
+                // SegQueue's pop is thread-safe and lock-free.
+                // In a multi-core scheduler, we return Pending to yield the CPU
+                // if no data is currently available.
                 match self.0.pop() {
                     Some(value) => Poll::Ready(value),
                     None => Poll::Pending,
@@ -303,27 +399,87 @@ pub mod multiple {
     pub mod bounded_channel {
         use super::*;
 
+        /// A multicore-safe, asynchronous, bounded MPMC (Multi-Producer, Multi-Consumer) channel.
+        ///
+        /// This channel is built on top of a lock-free `ArrayQueue`, making it ideal for
+        /// communication between different CPU cores in a UEFI environment without the
+        /// overhead of traditional mutexes.
+        ///
+        /// # Characteristics
+        /// * **Lock-Free**: Uses Atomic CAS (Compare-And-Swap) operations for high-performance synchronization.
+        /// * **Bounded**: Fixed capacity prevents memory exhaustion and provides backpressure.
+        /// * **Async-Aware**: Composed of `send_async` and a `Receiver` that implements `Future`.
+        ///
+        /// # Usage Example
+        ///
+        /// ```rust
+        /// // In UEFI Core 0 (Rendering Task)
+        /// async fn render_task(rx: ChannelReceiver<FrameData>) {
+        ///     loop {
+        ///         // Suspends the task if the queue is empty, allowing other tasks to run.
+        ///         let data = rx.await;
+        ///         draw_frame(data);
+        ///     }
+        /// }
+        ///
+        /// // In UEFI Core 1 (Physics Task)
+        /// async fn physics_task(tx: ChannelSender<FrameData>) {
+        ///     loop {
+        ///         let frame = calculate_physics();
+        ///         // If the queue is full, it yields control back to the executor
+        ///         // and retries on the next polling cycle.
+        ///         tx.send_async(frame).await;
+        ///     }
+        /// }
+        /// ```
+        pub fn channel<Data>(cap: usize) -> (ChannelSender<Data>, ChannelReceiver<Data>) {
+            let queue = Arc::new(ArrayQueue::new(cap));
+            (ChannelSender(queue.clone()), ChannelReceiver(queue))
+        }
+
         /// Multicore, multi-asynchronous, bounded
         #[derive(Clone,Debug)]
         pub struct ChannelSender<Data> (Arc<ArrayQueue<Data>>);
         #[derive(Debug)]
         pub struct ChannelReceiver<Data> (Arc<ArrayQueue<Data>>);
-        pub fn channel<Data>(cap: usize) -> (ChannelSender<Data>, ChannelReceiver<Data>) {
-            let queue = Arc::new(ArrayQueue::new(cap));
-            (ChannelSender(queue.clone()), ChannelReceiver(queue))
-        }
+
         impl<Data> ChannelSender<Data> {
-            /// Lock-free
+            /// Attempts to send a value into the channel without blocking.
+            ///
+            /// Returns `Ok(())` if successful, or `Err(Data)` if the queue is full.
             #[inline(always)]
             pub fn try_send(&self, value: Data) -> Result<(), Data> { self.0.push(value) }
+
+            /// Sends a value asynchronously.
+            ///
+            /// If the channel is full, this method will `Yield` control back to the executor,
+            /// effectively suspending the current task until the next executor tick.
+            pub async fn send_async(&self, mut data: Data) {
+                loop {
+                    match self.try_send(data) {
+                        Ok(_) => return,
+                        Err(d) => {
+                            data = d;
+                            // Queue is full; yield the current core's execution
+                            // and wait for the next polling cycle to retry.
+                            Yield.await;
+                        }
+                    }
+                }
+            }
         }
 
         impl<Data> Future for ChannelReceiver<Data> {
             type Output = Data;
+
+            /// Polls the receiver for data.
+            ///
+            /// Internally uses `ArrayQueue::pop` which relies on atomic operations
+            /// to maintain thread-safety across multiple cores.
             #[inline]
             fn poll(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Self::Output> {
-                // ArrayQueue 的 pop 使用原子操作 CAS 维护 head 指针
-                // 如果一个核的任务在等待数据， 直接返回 Pending，Executor 去执行其他 Task
+                // If no data is available, return Pending.
+                // The executor will switch to other available tasks.
                 match self.0.pop() {
                     Some(value) => Poll::Ready(value),
                     None => Poll::Pending,
