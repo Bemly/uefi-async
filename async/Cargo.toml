@@ -24,7 +24,7 @@ global-allocator = [ "uefi/alloc", "talc" ]
 
 # always enable
 uefi = "0.36.1"
-uefi-async-macros = { version = "0.2.5", path = "../macros" }
+uefi-async-macros = { version = "0.2.7", path = "../macros" }
 crossbeam = { version = "0.8.4", default-features = false }
 futures-concurrency = { version = "7.7.1", default-features = false }
 

@@ -11,6 +11,7 @@ use uefi_async::nano_alloc::time::{Timeout, WaitTimer, _Timeout, _WaitTimer};
 use uefi_async::nano_alloc::{add, Executor, TaskNode};
 use uefi_async::{tick, yield_now, Pacer, Skip, Yield, YIELD};
 use uefi_async::nano_alloc::control::multiple::prelude::*;
+use uefi_async::nano_alloc::control::single::join::{join, join_all, try_join};
 
 #[repr(C)]
 struct Context<'bemly_> {
@@ -62,8 +63,6 @@ async fn calc_2() {
         Ok(((), (), (), (), (), (), (), (), (), (), (), (), mem, fs, _)) => {},
         Err(_) => {},
     }
-
-
 
     let mut pacer = Pacer::new(20);
     loop {
