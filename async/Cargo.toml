@@ -21,11 +21,11 @@ embassy-backend = [ "static", "dep:embassy-executor" ]
 edge-backend = [ "static", "dep:edge-executor" ]
 
 # nano-alloc
-nano-alloc = [ "uefi/alloc" ]
+nano-alloc = [ "uefi/alloc", "crossbeam/alloc" ]
 cassette-backend = [ "nano-alloc", "dep:cassette" ]
 
 # alloc
-alloc = [ "uefi/alloc", "dep:st3", "dep:async-recursion" ]
+alloc = [ "uefi/alloc", "crossbeam/alloc", "dep:st3", "dep:async-recursion" ]
 #nya = [ "global-allocator" ]
 
 global-allocator = [ "uefi/alloc", "dep:talc" ]
@@ -33,6 +33,7 @@ global-allocator = [ "uefi/alloc", "dep:talc" ]
 [dependencies]
 uefi = "0.36.1"
 uefi-async-macros = { version = "0.2.1", path = "../macros" }
+crossbeam = { version = "0.8.4", default-features = false }
 
 # no-alloc
 static_cell = { version = "2.1.1", optional = true }
