@@ -1,4 +1,3 @@
-use uefi_async::nano_alloc::control::single::join;
 use alloc::boxed::Box;
 use alloc::vec;
 use core::ffi::c_void;
@@ -6,12 +5,13 @@ use core::ptr::addr_of_mut;
 use core::time::Duration;
 use uefi::boot::{create_event, get_handle_for_protocol, open_protocol_exclusive, stall, EventType, Tpl};
 use uefi::proto::pi::mp::MpServices;
-use uefi::{println, Status};
+use uefi::Status;
+use uefi_async::nano_alloc::control::single::join::{join, join_all, try_join};
+use uefi_async::nano_alloc::control::single::select::{select, Either};
+use uefi_async::nano_alloc::control::multiple::future::{Join, Race, TryJoin};
 use uefi_async::nano_alloc::time::{Timeout, WaitTimer, _Timeout, _WaitTimer};
 use uefi_async::nano_alloc::{add, Executor, TaskNode};
 use uefi_async::{tick, yield_now, Pacer, Skip, Yield, YIELD};
-use uefi_async::nano_alloc::control::multiple::prelude::*;
-use uefi_async::nano_alloc::control::single::join::{join, join_all, try_join};
 
 #[repr(C)]
 struct Context<'bemly_> {
@@ -62,6 +62,13 @@ async fn calc_2() {
      init_fs()).try_join().await {
         Ok(((), (), (), (), (), (), (), (), (), (), (), (), mem, fs, _)) => {},
         Err(_) => {},
+    }
+
+    [calc_1(), calc_1(), calc_1(), calc_1()].race().await;
+
+    select! {
+        calc_1() => {}, calc_1() => {}, calc_1() => {}, calc_1() => {}, calc_1() => {},
+        10.ms() => {},
     }
 
     let mut pacer = Pacer::new(20);

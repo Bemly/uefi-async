@@ -1,6 +1,7 @@
 //! uefi-async
 //! ================================
-//! A lightweight, zero-cost asynchronous executor designed specifically for UEFI environments or bare-metal Rust. It provides a simple task scheduler based on a intrusive linked-list and a procedural macro to simplify task registration.
+//! A lightweight, zero-cost asynchronous executor designed specifically for UEFI environments or bare-metal Rust.
+//! It provides a simple task scheduler based on a intrusive linked-list and procedural macro to simplify task registration.
 //! 
 //! --------------------------------
 //! Work in Progress
@@ -12,7 +13,7 @@
 //! --------------------------------
 //! * **No-Std Compatible**: Designed for environments without a standard library (requires `alloc`).
 //! * **Intrusive Linked-List**: No additional collection overhead for managing tasks.
-//! * **Frequency-Based Scheduling**: Define tasks to run at specific frequencies (Hz), automatically converted to hardware ticks.
+//! * **Frequency-Based Scheduling**: Define tasks to run at specific frequencies (Hz), automatically converted to ticks.
 //! * **Macro-Driven Syntax**: A clean, declarative DSL to assign tasks to executors.
 //! * **Tiny Control Primitives**: Comprehensive support for timeouts, joins, and hardware-precise timing.
 //! * **Safe Signaling:** Cross-core event notification with atomic state transitions.
@@ -47,6 +48,8 @@
 //! * **Trait-based Joins**: Call `.join().await` or `.try_join().await` directly on Tuples, Arrays, or Vectors.
 //! 
 //! ```rust
+//! async fn calc_1() {}
+//! async fn calc_2() {}
 //! async fn async_task() {
 //!     // Join tasks into a single state machine on the stack
 //!     join!(calc_1(), calc_2(), ...).await;
@@ -71,7 +74,7 @@
 //! 
 //! ### 4. Advanced Execution Pacing
 //! 
-//! The `Pacer` allows you to strictly control the "rhythm" of your loops, essential for smooth 3D rendering or UI animations.
+//! `Pacer` allows you to strictly control the "rhythm" of your loops, essential for smooth 3D rendering or UI animations.
 //! 
 //! ```rust
 //! async fn paced_loop() {
@@ -86,21 +89,7 @@
 //! 
 //! ### 5. Oneshot, Channel and Signal...
 //! 
-//! ```rust
-//! static ASSET_LOADED: Signal<TextureHandle> = Signal::new();
-//! 
-//! async fn background_loader() {
-//!     let texture = load_texture_gop("logo.bmp").await;
-//!     // Notify the renderer that the texture is ready
-//!     ASSET_LOADED.signal(texture);
-//! }
-//! 
-//! async fn renderer_task() {
-//!     // Suspend execution until the signal is triggered
-//!     let texture = ASSET_LOADED.wait().await;
-//!     draw_to_screen(texture);
-//! }
-//! ```
+//! Synchronization Primitives are lightweight, zero-cost and safe for asynchronous communication and synchronization.
 //! 
 //! ```rust
 //! // 1. Create a channel for keyboard events with a capacity of 32
@@ -137,17 +126,39 @@
 //! --------------------------------
 //! Multicore & Multi-Scheduler Concurrency
 //! --------------------------------
-//! `uefi-async` enabling seamless and safe parallel execution across multiple cores and schedulers. It provides a robust suite of synchronization and control primitives designed to handle the complexities of asynchronous multicore tasking.
+//! `uefi-async` enabling seamless and safe parallel execution across multiple cores and schedulers.
+//! It provides a robust suite of synchronization and control primitives designed to
+//! handle the complexities of asynchronous multicore tasking.
 //! 
-//! ### Thread-Safe Asynchronous Primitives
+//! ### Core-Safe Asynchronous Primitives
 //! 
-//! To ensure data integrity and prevent race conditions during parallel execution, the framework provides three specialized pillars:
+//! To ensure data integrity and prevent race conditions during parallel execution,
+//! the framework provides three specialized pillars:
 //! 
-//! * **Event-based Futures (Event Listening):** Designed for non-blocking coordination, these futures allow tasks to react to external signals or hardware interrupts across different cores without polling.
-//! * **Synchronization Primitives (Data Integrity):** Reliable data sharing is critical when multiple schedulers access the same memory space. We provide thread-safe containers and locks like **Async Mutexes** and **Atomic Shared States** specifically tuned for UEFI.
-//! * **Task Control Futures (Execution Management):** Granular control over the lifecycle of parallel tasks. This includes **Structured Concurrency** to spawn, join, or cancel tasks across different schedulers, and **Priority Steering** to direct critical tasks to specific cores.
+//! * **Event-based Futures (Event Listening):** Designed for non-blocking coordination, these futures allow tasks to
+//! react to external signals or hardware interrupts across different cores without polling.
+//! * **Synchronization Primitives (Data Integrity):** Reliable data sharing is critical when multiple schedulers
+//! access the same memory space. We provide thread-safe containers and locks like **Async Mutexes** and
+//! **Atomic Shared States** specifically tuned for UEFI.
+//! * **Task Control Futures (Execution Management):** Granular control over the lifecycle of parallel tasks.
+//! This includes **Structured Concurrency** to spawn, join, or cancel tasks across different schedulers,
+//! and **Priority Steering** to direct critical tasks to specific cores.
 //! 
+//! ```rust
+//! static ASSET_LOADED: Signal<TextureHandle> = Signal::new();
 //! 
+//! async fn background_loader() {
+//!     let texture = load_texture_gop("logo.bmp").await;
+//!     // Notify the renderer that the texture is ready
+//!     ASSET_LOADED.signal(texture);
+//! }
+//! 
+//! async fn renderer_task() {
+//!     // Suspend execution until the signal is triggered
+//!     let texture = ASSET_LOADED.wait().await;
+//!     draw_to_screen(texture);
+//! }
+//! ```
 //! 
 //! --------------------------------
 //! Installation
@@ -274,7 +285,43 @@
 //! --------------------------------
 //! Why use `uefi-async`?
 //! --------------------------------
-//! In UEFI development, managing multiple periodic tasks (like polling keyboard input while updating a UI or handling network packets) manually can lead to "spaghetti code." `uefi-async` allows you to write clean, linear `async/await` code while the executor ensures that timing constraints are met without a heavy OS-like scheduler.
+//! In UEFI development, managing multiple periodic tasks (like polling keyboard input while updating a UI
+//! or handling network packets) manually can lead to "spaghetti code." `uefi-async` allows you to write clean,
+//! linear `async/await` code while the executor ensures that timing constraints are met without a heavy OS-like scheduler.
+//! 
+//! --------------------------------
+//! Acknowledgments
+//! --------------------------------
+//! 
+//! This code is inspired by the approach in these Rust crate:
+//! 
+//! [uefi](https://crates.io/crates/uefi),
+//! [crossbeam](https://crates.io/crates/crossbeam),
+//! [futures-concurrency](https://crates.io/crates/futures-concurrency),
+//! [static_cell](https://crates.io/crates/static_cell),
+//! [embassy-executor](https://crates.io/crates/embassy-executor),
+//! [edge-executor](https://crates.io/crates/edge-executor),
+//! [num_enum](https://crates.io/crates/num_enum),
+//! [nblfq](https://crates.io/crates/nblfq),
+//! [cassette](https://crates.io/crates/cassette),
+//! [st3](https://crates.io/crates/st3),
+//! [async-recursion](https://crates.io/crates/async-recursion),
+//! [talc](https://crates.io/crates/talc),
+//! [spin](https://crates.io/crates/spin),
+//! [pin-project](https://crates.io/crates/pin-project).
+//! 
+//! --------------------------------
+//! Contributing
+//! --------------------------------
+//! I am still a learner when it comes to low-level async architecture, and many parts of this project might have
+//! been implemented in a "roundabout" way. The performance might not be optimal yet,
+//! and it has **not** been rigorously tested for production environments.
+//! 
+//! I would deeply appreciate any guidance, feedback, or suggestions from the community.
+//! 
+//! **Pull Requests are extremely welcome!** Whether it's a bug fix, performance optimization, or code refactoring,
+//! I am open to all contributions and will accept every PR that helps improve this project.
+//! Let's make UEFI Great Again!
 //! 
 //! --------------------------------
 //! License

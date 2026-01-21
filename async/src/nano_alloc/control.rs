@@ -1,15 +1,19 @@
 
-
+/// Multi-Core Concurrent control flow utilities.
 pub mod multiple {
     pub use futures_concurrency::*;
 }
 
+/// Single-Core Control flow utilities.
 pub mod single {
+    use core::future::Future;
+    use core::pin::Pin;
+    use core::task::{Context, Poll};
+    use pin_project::pin_project;
+
+    /// A collection of futures that can be joined together.
     pub mod join {
-        use core::future::Future;
-        use core::pin::Pin;
-        use core::task::{Context, Poll};
-        use pin_project::pin_project;
+        use super::*;
 
         /// Joins multiple futures together, running them concurrently until all complete.
         ///
@@ -64,6 +68,7 @@ pub mod single {
         impl<H: Future<Output = ()>, T: Future<Output = ()>> Future for Join<H, T> {
             type Output = ();
 
+            /// Polls the two sub-futures to completion.
             fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
                 let this = self.project();
 
@@ -88,28 +93,23 @@ pub mod single {
         impl<E, H: Future<Output = Result<(),E>>, T: Future<Output = Result<(),E>>> Future for TryJoin<H, T> {
             type Output = Result<(), E>;
 
+            /// Polls the two sub-futures to completion.
             fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
                 let this = self.project();
-
-                // 1. 轮询第一个任务 (Head)
                 if !*this.head_done {
                     match this.head.poll(cx) {
-                        Poll::Ready(Err(e)) => return Poll::Ready(Err(e)), // 遇到错误立刻中断
-                        Poll::Ready(Ok(_)) => *this.head_done = true,     // 标记成功
+                        Poll::Ready(Err(e)) => return Poll::Ready(Err(e)),
+                        Poll::Ready(Ok(_)) => *this.head_done = true,
                         Poll::Pending => {}
                     }
                 }
-
-                // 2. 轮询第二个任务 (Tail)
                 if !*this.tail_done {
                     match this.tail.poll(cx) {
-                        Poll::Ready(Err(e)) => return Poll::Ready(Err(e)), // 遇到错误立刻中断
-                        Poll::Ready(Ok(_)) => *this.tail_done = true,     // 标记成功
+                        Poll::Ready(Err(e)) => return Poll::Ready(Err(e)),
+                        Poll::Ready(Ok(_)) => *this.tail_done = true,
                         Poll::Pending => {}
                     }
                 }
-
-                // 3. 只有当两者都成功时，才返回 Ok
                 if *this.head_done && *this.tail_done { Poll::Ready(Ok(())) } else { Poll::Pending }
             }
         }
@@ -126,11 +126,13 @@ pub mod single {
         }
 
         impl<H: Future, T: Future> JoinAll<H, T> {
+            /// Create a new JoinAll future.
             pub fn new(head: H, tail: T) -> Self { Self { head, tail, head_res: None, tail_res: None } }
         }
 
         impl<H: Future, T: Future> Future for JoinAll<H, T> {
             type Output = (H::Output, T::Output);
+            /// Polls the two sub-futures to completion.
             fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
                 let this = self.project();
 
@@ -152,6 +154,66 @@ pub mod single {
                 } else {
                     Poll::Pending
                 }
+            }
+        }
+    }
+
+    /// Polls multiple futures and returns the result of the first one that completes.
+    pub mod select {
+        use super::*;
+
+        /// Polls multiple futures and returns the result of the first one that completes.
+        ///
+        /// The remaining futures are dropped immediately, which is useful for implementing
+        /// timeouts or interrupting long-running tasks.
+        ///
+        /// # Examples
+        /// ```rust, no_run
+        /// select! {
+        ///     get_keypress() => handle_input(key) // User pressed a key
+        ///     16.ms()        => render_frame(),   // Timed out, render next frame
+        /// }
+        /// ```
+        pub use uefi_async_macros::select;
+
+        /// A type representing a result from one of two futures.
+        pub enum Either<A, B> {
+            Left(A),
+            Right(B),
+        }
+
+        /// A Future that polls two sub-futures and returns the result of the first one that completes.
+        ///
+        /// The remaining futures are dropped immediately, which is useful for implementing
+        /// timeouts or interrupting long-running tasks.
+        /// # Examples
+        /// ```rust, no_run
+        /// select! {
+        ///     get_keypress() => handle_input(key) // User pressed a key
+        ///     16.ms()        => render_frame(),   // Timed out, render next frame
+        /// }
+        /// ```
+        #[pin_project]
+        pub struct Select<H, T> {
+            #[pin] pub head: H,
+            #[pin] pub tail: T,
+        }
+        impl<H, T> Select<H, T> {
+            /// Create a new Select future.
+            pub fn new(head: H, tail: T) -> Self { Self { head, tail } }
+        }
+        impl<H: Future, T: Future> Future for Select<H, T> {
+            type Output = Either<H::Output, T::Output>;
+            /// Polls two sub-futures and returns the result of the first one that completes.
+            fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+                let this = self.project();
+                if let Poll::Ready(out) = this.head.poll(cx) {
+                    return Poll::Ready(Either::Left(out));
+                }
+                if let Poll::Ready(out) = this.tail.poll(cx) {
+                    return Poll::Ready(Either::Right(out));
+                }
+                Poll::Pending
             }
         }
     }

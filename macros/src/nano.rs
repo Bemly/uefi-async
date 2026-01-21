@@ -7,6 +7,7 @@ use syn::{
     punctuated::Punctuated,
     Expr, Ident, Token, Result,
 };
+use syn::Block;
 
 /// Represents a single task mapping within an executor.
 ///
@@ -107,26 +108,25 @@ pub fn task(input: TokenStream) -> TokenStream {
             declarations.push(quote! {
                 let mut #var_name = TaskNode::new(Box::pin(#func), #freq);
                 #exec_name.add(&mut #var_name);
-            });
+            })
         }
     }
 
-    quote! {
-        #(#declarations)*
-    }
+    quote! { #(#declarations)* }
 }
 
 pub mod join {
     use super::*;
 
-    struct JoinInput {
-        exprs: Punctuated<Expr, Token![,]>,
-    }
+    fn get_path() -> TokenStream { quote! { ::uefi_async::nano_alloc::control::single::join } }
+
+
+    struct JoinInput (Punctuated<Expr, Token![,]>);
 
     impl Parse for JoinInput {
         fn parse(input: ParseStream) -> Result<Self> {
             let exprs = Punctuated::parse_terminated(input)?;
-            Ok(JoinInput { exprs })
+            Ok(JoinInput(exprs))
         }
     }
 
@@ -160,11 +160,9 @@ pub mod join {
             Err(err) => return err.to_compile_error(),
         };
 
-        let mut expr_list: Vec<Expr> = input.exprs.into_iter().collect();
+        let mut expr_list: Vec<Expr> = input.0.into_iter().collect();
 
-        if expr_list.is_empty() {
-            return quote! { async {} };
-        }
+        if expr_list.is_empty() { return quote! { async {} } }
 
         let tree = build_join_tree(&mut expr_list, is_try);
 
@@ -178,26 +176,18 @@ pub mod join {
     fn build_join_tree(exprs: &mut Vec<Expr>, is_try: bool) -> TokenStream {
         if exprs.len() == 1 {
             let last = exprs.pop().unwrap();
-            return quote! { #last };
+            return quote! { #last }
         }
 
         let head = exprs.remove(0);
         let tail = build_join_tree(exprs, is_try);
 
-        let class = if is_try {
-            quote! { ::uefi_async::nano_alloc::control::single::join::TryJoin }
-        } else {
-            quote! { ::uefi_async::nano_alloc::control::single::join::Join  }
-        };
+        let path = get_path();
 
-        quote! {
-            #class {
-                head: #head,
-                tail: #tail,
-                head_done: false,
-                tail_done: false,
-            }
-        }
+        let class = if is_try { quote! { #path::TryJoin } }
+        else { quote! { #path::Join } };
+
+        quote! { #class { head: #head, tail: #tail, head_done: false, tail_done: false } }
     }
 
     /// Joins multiple futures and collects their heterogeneous output into a flattened tuple.
@@ -228,12 +218,10 @@ pub mod join {
             Err(err) => return err.to_compile_error(),
         };
 
-        let exprs: Vec<Expr> = input.exprs.into_iter().collect();
+        let exprs: Vec<Expr> = input.0.into_iter().collect();
         let count = exprs.len();
 
-        if count == 0 {
-            return quote! { async { () } };
-        }
+        if count == 0 {  return quote! { async { () } } }
         if count == 1 {
             let f = &exprs[0];
             return quote! { async move { #f.await } };
@@ -256,12 +244,7 @@ pub mod join {
             pattern = quote! { (#id, #prev_pattern) };
         }
 
-        quote! {
-            async move {
-                let #pattern = #tree.await;
-                ( #(#res_idents),* )
-            }
-        }
+        quote! { async move { let #pattern = #tree.await; ( #(#res_idents),* ) } }
     }
 
     /// Internal helper to recursively construct the `JoinAll` tree.
@@ -272,17 +255,101 @@ pub mod join {
         let count = exprs.len();
         let head = &exprs[0];
 
+        let path = get_path();
+
         if count == 2 {
             let tail = &exprs[1];
-            return quote! {
-                ::uefi_async::nano_alloc::control::single::join::JoinAll::new(#head, #tail)
-            };
+            return quote! { #path::JoinAll::new(#head, #tail) };
         }
 
         let tail_tree = build_join_all_tree(&exprs[1..]);
 
-        quote! {
-            ::uefi_async::nano_alloc::control::single::join::JoinAll::new(#head, #tail_tree)
+        quote! { #path::JoinAll::new(#head, #tail_tree) }
+    }
+}
+
+/// Polls multiple futures and returns the result of the first one that completes.
+pub mod select {
+    use super::*;
+
+    fn get_path() -> TokenStream { quote! { ::uefi_async::nano_alloc::control::single::select } }
+
+    // Analyzing a single branch: expr => { block }
+    struct SelectBranch { expr: Expr, _arrow: Token![=>], block: Block }
+
+    impl Parse for SelectBranch {
+        fn parse(input: ParseStream) -> Result<Self> {
+            Ok(SelectBranch {
+                expr: input.parse()?,
+                _arrow: input.parse()?,
+                block: input.parse()?,
+            })
         }
+    }
+
+    // Analyze the entire macro input: select! { ... }
+    struct SelectInput (Punctuated<SelectBranch, Token![,]>);
+
+    impl Parse for SelectInput {
+        fn parse(input: ParseStream) -> Result<Self> {
+            Ok(SelectInput(Punctuated::parse_terminated(input)?))
+        }
+    }
+    pub fn select(input: TokenStream) -> TokenStream {
+        let input = match parse2::<SelectInput>(input) {
+            Ok(res) => res,
+            Err(err) => return err.to_compile_error(),
+        };
+
+        let branches: Vec<SelectBranch> = input.0.into_iter().collect();
+        let count = branches.len();
+        let path = get_path();
+
+        if count == 0 { return quote! { core::future::pending::<()>().await } }
+
+        // Extract all expressions to construct a Future tree
+        let exprs: Vec<Expr> = branches.iter().map(|b| b.expr.clone()).collect();
+        let tree = build_select_tree(&exprs);
+
+        let mut match_arms = Vec::new();
+        for i in 0..count {
+            let block = &branches[i].block;
+            let mut pattern;
+
+            // Construct the corresponding Either path match
+            if i < count - 1 {
+                pattern = quote! { #path::Either::Left(val) };
+                for _ in 0..i {
+                    pattern = quote! { #path::Either::Right(#pattern) };
+                }
+            } else {
+                pattern = quote! { val };
+                for _ in 0..(count - 1) {
+                    pattern = quote! { #path::Either::Right(#pattern) };
+                }
+            }
+
+            // Place the user's block in the match branch,
+            // and the value can be accessed by the block.
+            match_arms.push(quote! { #pattern => { let _ = val; #block } });
+            // To prevent the error message "val not used"
+        }
+
+        quote! { match #tree.await { #(#match_arms,)* } }
+    }
+
+    fn build_select_tree(exprs: &[Expr]) -> TokenStream {
+        let count = exprs.len();
+        let head = &exprs[0];
+
+        let path = get_path();
+
+        if count == 2 {
+            let tail = &exprs[1];
+            return quote! { #path::Select::new(#head, #tail) };
+        }
+
+        let tail_tree = build_select_tree(&exprs[1..]);
+        quote! { #path::Select::new(#head, #tail_tree) }
     }
 }

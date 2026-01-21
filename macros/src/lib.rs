@@ -216,3 +216,18 @@ pub fn try_join(input: TokenStream) -> TokenStream { nano::join::join(input.into
 /// ```
 #[proc_macro]
 pub fn join_all(input: TokenStream) -> TokenStream { nano::join::join_all(input.into()).into() }
+
+/// Polls multiple futures and returns the result of the first one that completes.
+///
+/// The remaining futures are dropped immediately, which is useful for implementing
+/// timeouts or interrupting long-running tasks.
+///
+/// # Examples
+/// ```rust, no_run
+/// select! {
+///     get_keypress() => handle_input(key) // User pressed a key
+///     16.ms()        => render_frame(),   // Timed out, render next frame
+/// }
+/// ```
+#[proc_macro]
+pub fn select(input: TokenStream) -> TokenStream { nano::select::select(input.into()).into() }
