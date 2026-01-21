@@ -5,11 +5,15 @@ use core::task::{Context, Poll};
 
 /// Usage:
 /// ```rust,no_run
-/// async fn calc_1() {}
-/// async fn calc_2() {
+/// use uefi_async::nano_alloc::time::Timeout;
+///
+///  async fn calc_1() {}
+///  async fn calc_2() {
+///     match Box::pin(calc_2()).timeout(Duration::from_secs(2).as_secs()).await { _ => () }
+///     match Timeout::new_pin(Box::pin(calc_2()), 500).await { _ => () }
 ///     match Timeout::new(calc_1(), 300).await { _ => () }
 ///     match calc_2().timeout(500).await { Ok(_) => {}, Err(_) => {} }
-/// }
+///  }
 /// ```
 pub struct Timeout<'bemly_, Content> {
     future: Pin<Box<dyn Future<Output = Content> + 'bemly_>>,
@@ -17,8 +21,14 @@ pub struct Timeout<'bemly_, Content> {
 }
 
 impl<'bemly_, Content> Timeout<'bemly_, Content> {
-    pub fn new(future: impl Future<Output = Content> + 'bemly_, duration: u64) -> Self {
-        Self { future: Box::pin(future), deadline: tick() + duration }
+    #[inline]
+    pub fn new(future: impl Future<Output = Content> + 'bemly_, ticks: u64) -> Self {
+        Self { future: Box::pin(future), deadline: tick().saturating_add(ticks) }
+    }
+
+    #[inline(always)]
+    pub fn new_pin(future: Pin<Box<dyn Future<Output = Content> + 'bemly_>>, ticks: u64) -> Self {
+        Self { future, deadline: tick().saturating_add(ticks) }
     }
 }
 
@@ -37,23 +47,21 @@ impl<'bemly_, Content> Future for Timeout<'bemly_, Content> {
 }
 pub trait _Timeout<'bemly_>: Future + Sized {
     fn timeout(self, duration_ticks: u64) -> Timeout<'bemly_, Self::Output> where Self: 'bemly_ {
-        Timeout {
-            future: Box::pin(self),
-            deadline: tick() + duration_ticks,
-        }
+        Timeout::new(self, duration_ticks)
     }
 }
 impl<F: Future + Sized> _Timeout<'_> for F {}
 
 ///
 /// Usage:
-/// ```rust
+/// ```rust,no_run
+/// use uefi_async::nano_alloc::time::{WaitTimer, _WaitTimer};
 /// async fn blink_led_task(cpu_freq: u64) {
 ///     loop {
 ///         set_led(true);
 ///         2.year().await;
 ///         5.day().await;
-///         1.min().await;
+///         1.mins().await;
 ///         80.ps().await;
 ///         1.us().await;
 ///         500.ms().await;
@@ -64,6 +72,7 @@ impl<F: Future + Sized> _Timeout<'_> for F {}
 /// }
 /// ```
 ///
+#[derive(Debug)]
 pub struct WaitTimer(u64);
 
 impl WaitTimer {
@@ -121,11 +130,9 @@ impl Future for WaitTimer {
     type Output = ();
 
     fn poll(self: Pin<&mut Self>, _: &mut Context) -> Poll<Self::Output> {
-
         if self.is_expired() { Poll::Ready(()) } else { Poll::Pending }
     }
 }
-
 
 pub trait _WaitTimer {
     fn year(self) -> WaitTimer;
@@ -133,7 +140,7 @@ pub trait _WaitTimer {
     fn week(self) -> WaitTimer;
     fn day(self) -> WaitTimer;
     fn hour(self) -> WaitTimer;
-    fn min(self) -> WaitTimer;
+    fn mins(self) -> WaitTimer;
     fn s(self) -> WaitTimer;
     fn hz(self) -> WaitTimer;
     fn ms(self) -> WaitTimer;
@@ -160,7 +167,7 @@ impl _WaitTimer for u64 {
     fn hour(self) -> WaitTimer { WaitTimer::from_hour(self) }
 
     #[inline(always)]
-    fn min(self) -> WaitTimer { WaitTimer::from_min(self) }
+    fn mins(self) -> WaitTimer { WaitTimer::from_min(self) }
 
     #[inline(always)]
     fn s(self) -> WaitTimer { WaitTimer::from_s(self) }

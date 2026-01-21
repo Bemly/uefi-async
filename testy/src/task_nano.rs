@@ -21,7 +21,7 @@ async fn calc_2() {
     WaitTimer::from_ms(500).await;
     2.year().await;
     5.day().await;
-    1.min().await;
+    1.mins().await;
     80.ps().await;
     1.us().await;
     500.ms().await;
@@ -31,6 +31,8 @@ async fn calc_2() {
     yield_now().await;
     Skip(2).await;
 
+    match Box::pin(calc_2()).timeout(Duration::from_secs(2).as_secs()).await { _ => () }
+    match Timeout::new_pin(Box::pin(calc_2()), 500).await { _ => () }
     match Timeout::new(calc_1(), 300).await { _ => () }
     match calc_2().timeout(500).await { Ok(_) => {}, Err(_) => {} }
 

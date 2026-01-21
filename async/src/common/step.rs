@@ -4,12 +4,14 @@ use core::task::{Context, Poll};
 
 pub const YIELD: _Yield = _Yield(false);
 pub async fn yield_now() { _Yield(false).await }
+#[derive(Debug)]
 pub struct Yield;
 impl IntoFuture for Yield {
     type Output = ();
     type IntoFuture = _Yield;
     fn into_future(self) -> Self::IntoFuture { _Yield(false) }
 }
+#[derive(Debug)]
 pub struct _Yield(bool);
 impl Future for _Yield {
     type Output = ();
@@ -18,6 +20,7 @@ impl Future for _Yield {
     }
 }
 
+#[derive(Debug)]
 pub struct Skip(pub usize);
 impl Future for Skip {
     type Output = ();
@@ -26,6 +29,7 @@ impl Future for Skip {
     }
 }
 
+#[derive(Debug)]
 pub struct Pacer {
     count: usize,
     countdown: usize,

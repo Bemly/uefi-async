@@ -1,41 +1,78 @@
-use core::cell::Cell;
-use core::task::{Poll, Context};
+use core::cell::{RefCell, UnsafeCell};
 use core::future::Future;
 use core::pin::Pin;
 use core::sync::atomic::{AtomicBool, Ordering};
+use core::task::{Context, Poll};
 use spin::Mutex;
 
 /// Single-core, multi-asynchronous
 ///
 /// Usage:
 /// ```rust,no_run
-/// static TEXTURE_LOADED: Signal = Signal::new();
+/// // 定义一个传输 3D 模型元数据的信号
+/// static MODEL_READY: Signal<ModelInfo> = Signal::new();
+///
 /// async fn loader_task() {
-///     load_gpu_textures();
-///     TEXTURE_LOADED.signal();
+///     let info = load_from_disk().await;
+///     MODEL_READY.signal(info); // 发送数据
 /// }
+///
 /// async fn render_task() {
-///     TEXTURE_LOADED.wait().await;
-///     loop {
-///         draw_frame();
-///         Yield.await;
-///     }
+///     // 异步等待数据到达
+///     let info = MODEL_READY.wait().await;
+///     println!("Loading model: {}", info.name);
+///     draw_mesh(info).await;
 /// }
 /// ```
-pub struct Signal (Cell<bool>); // triggered
+#[derive(Debug)]
+pub struct Signal<Data> (RefCell<Option<Data>>);
+#[derive(Debug)]
+pub struct _Signal<'bemly_, Data> (&'bemly_ Signal<Data>);
 
-impl Signal {
-    pub const fn new() -> Self { Self(Cell::new(false)) }
-    pub fn signal(&self) { self.0.set(true) }
-    pub fn wait(&self) -> _Signal<'_> { _Signal(self) }
+impl<Data> Signal<Data> {
+    pub const fn new() -> Self { Self(RefCell::new(None)) }
+    /// 发送信号并存入数据
+    pub fn signal(&self, value: Data) { *self.0.borrow_mut() = Some(value) }
+
+    /// 获取等待信号的 Future
+    pub fn wait(&self) -> _Signal<'_, Data> { _Signal(self) }
+
+    /// 检查信号是否已被触发（不消耗数据）
+    pub fn is_triggered(&self) -> bool { self.0.borrow().is_some() }
+}
+impl<Data> Future for _Signal<'_, Data> {
+    type Output = Data;
+    fn poll(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Self::Output> {
+        match self.0.0.borrow_mut().take() {
+            Some(data) => Poll::Ready(data),
+            None => Poll::Pending,
+        }
+    }
 }
 
-pub struct _Signal<'bemly_> (&'bemly_ Signal); // signal
+/// Single-core, multi-asynchronous, Unsafe, Fast
+#[derive(Debug)]
+pub struct UnsafeSignal<Data> (UnsafeCell<Option<Data>>);
+#[derive(Debug)]
+pub struct _UnsafeSignal<'bemly_, Data> (&'bemly_ UnsafeSignal<Data>);
+unsafe impl<Data> Sync for UnsafeSignal<Data> {}
+impl<Data> UnsafeSignal<Data> {
+    pub const fn new() -> Self { Self(UnsafeCell::new(None)) }
+    pub fn signal(&self, value: Data) { unsafe { *self.0.get() = Some(value) } }
 
-impl Future for _Signal<'_> {
-    type Output = ();
-    fn poll(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<()> {
-        if self.0.0.get() { Poll::Ready(()) } else { Poll::Pending }
+    pub fn is_triggered(&self) -> bool { unsafe { (*self.0.get()).is_some() } }
+
+    pub fn wait(&self) -> _UnsafeSignal<'_, Data> { _UnsafeSignal(self) }
+}
+impl<Data> Future for _UnsafeSignal<'_, Data> {
+    type Output = Data;
+    fn poll(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Self::Output> {
+        let data_ptr = self.0.0.get();
+        unsafe {
+            if (*data_ptr).is_some() {
+                Poll::Ready((*data_ptr).take().expect("Signal data is None"))
+            } else { Poll::Pending }
+        }
     }
 }
 
@@ -61,10 +98,13 @@ impl Future for _Signal<'_> {
 ///     }
 /// }
 /// ```
+#[derive(Debug)]
 pub struct MultiCoreSignal<Data> {
     data: Mutex<Option<Data>>,
     has_data: AtomicBool,
 }
+#[derive(Debug)]
+pub struct _MultiCoreSignal<'bemly_, Data> (&'bemly_ MultiCoreSignal<Data>);
 
 impl<Data> MultiCoreSignal<Data> {
     pub const fn new() -> Self { Self { data: Mutex::new(None), has_data: AtomicBool::new(false) } }
@@ -78,8 +118,6 @@ impl<Data> MultiCoreSignal<Data> {
         *self.data.lock() = None
     }
 }
-
-pub struct _MultiCoreSignal<'bemly_, Data> (&'bemly_ MultiCoreSignal<Data>);
 impl<'bemly_, Data> Future for _MultiCoreSignal<'bemly_, Data> {
     type Output = Data;
     fn poll(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Self::Output> {

@@ -54,6 +54,7 @@ pub fn calc_freq_blocking() -> u64 {
     ticks_per_100ms * 10
 }
 
+#[derive(Debug)]
 pub struct ClockFreq { hz: AtomicU64, ms: AtomicU64, us: AtomicU64, ns: AtomicU64, ps: AtomicU64 }
 impl ClockFreq {
     #[inline(always)]
