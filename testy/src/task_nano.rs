@@ -5,9 +5,9 @@ use core::time::Duration;
 use uefi::boot::{create_event, get_handle_for_protocol, open_protocol_exclusive, stall, EventType, Tpl};
 use uefi::proto::pi::mp::MpServices;
 use uefi::Status;
-use uefi_async::nano_alloc::time::{Timeout, TimeoutExt, WaitTimer, WaitTimerBlockingExt};
+use uefi_async::nano_alloc::time::{Timeout, WaitTimer, _Timeout, _WaitTimer};
 use uefi_async::nano_alloc::{add, Executor, TaskNode};
-use uefi_async::{calc_freq_blocking, tick, yield_now, Pacer, Skip, Yield, YIELD};
+use uefi_async::{tick, yield_now, Pacer, Skip, Yield, YIELD};
 
 #[repr(C)]
 struct Context<'bemly_> {
@@ -18,13 +18,18 @@ struct Context<'bemly_> {
 async fn calc_1() {}
 
 async fn calc_2() {
+    WaitTimer::from_ms(500).await;
+    2.year().await;
+    5.day().await;
+    1.min().await;
+    80.ps().await;
     1.us().await;
     500.ms().await;
+    20.fps().await;
     YIELD.await;
     Yield.await;
     yield_now().await;
     Skip(2).await;
-    WaitTimer::from_ms(500, calc_freq_blocking()).await;
 
     match Timeout::new(calc_1(), 300).await { _ => () }
     match calc_2().timeout(500).await { Ok(_) => {}, Err(_) => {} }

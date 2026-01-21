@@ -1,6 +1,6 @@
-use core::task::{Context, Poll, Waker};
+use crate::{init_clock_freq, tick};
 use crate::nano_alloc::TaskNode;
-use crate::common::{calc_freq_blocking, tick};
+use core::task::{Context, Poll, Waker};
 
 /// A simple round-robin executor that manages a linked-list of tasks.
 ///
@@ -10,13 +10,13 @@ pub struct Executor<'curr, 'next> {
     /// The head of the task linked-list.
     head: Option<&'next mut TaskNode<'curr, 'next>>,
     /// The hardware clock frequency, used to normalize task intervals.
-    freq: u64,
+    pub freq: u64,
 }
 
 impl<'curr, 'next> Executor<'curr, 'next> {
     /// Initializes a new executor and calculates the hardware frequency.
     #[inline]
-    pub fn new() -> Self { Self{ head: None, freq: calc_freq_blocking() } }
+    pub fn new() -> Self { Self{ head: None, freq: init_clock_freq() } }
 
     /// Adds a task node to the executor.
     ///
@@ -33,7 +33,7 @@ impl<'curr, 'next> Executor<'curr, 'next> {
     }
 
     /// Enters an infinite loop, continuously ticking the executor.
-    #[inline]
+    #[inline(always)]
     pub fn run_forever(&mut self) {
         let mut cx = Self::init_step();
         loop { self.run_step(tick(), &mut cx) }
@@ -50,7 +50,7 @@ impl<'curr, 'next> Executor<'curr, 'next> {
     /// 2. Polls the future.
     /// 3. If `Ready`, the node is removed from the list.
     /// 4. If `Pending`, the `next_run_time` is updated by the node's interval.
-    #[inline]
+    #[inline(always)]
     pub fn run_step(&mut self, time: u64, cx: &mut Context) {
         let mut cursor = &mut self.head;
 
