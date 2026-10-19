@@ -1,7 +1,10 @@
 //! This code is inspired by the approach in this embedded Rust crate: embassy-executor.
 //!
 //! Usage:
-//! ```rust, no_run
+//! ```rust,no_run
+//! # use core::future::Future;
+//! # use core::mem::{align_of, size_of, size_of_val, transmute};
+//! # use uefi_async::no_alloc::task::{SafeFuture, TaskCapture, TaskFn, TaskPool, TaskPoolLayout};
 //! #[doc(hidden)]
 //! fn __async_fun() -> impl Future<Output = ()> { ( move || async move {})() }
 //! fn async_fun() {
@@ -12,7 +15,7 @@
 //!     const fn get<F, Args, Fut>(_: F) -> &'static TaskPool<Fut, POOL_SIZE>
 //!     where F: TaskFn<Args, Fut = Fut>, Fut: SafeFuture {
 //!         const {
-//!             assert_eq!(size_of::<TaskPool<Fut, POOL_SIZE>>(), size_of_val(&POOL));
+//!             assert!(size_of::<TaskPool<Fut, POOL_SIZE>>() == size_of_val(&POOL));
 //!             assert!(align_of::<TaskPool<Fut, POOL_SIZE>>() <= 128);
 //!         }
 //!         unsafe { &*POOL.get().cast() }
@@ -87,8 +90,9 @@ impl<F: SafeFuture> TaskSlot<F> {
     // 包装函数：将 *mut TaskHeader 转回 TaskSlot<F> 并执行
     pub unsafe fn poll(ptr: *mut TaskHeader) -> bool {
         // SAFETY: 调用方保证 ptr 指向活的 TaskSlot<F>（run_task 刚从队列里
-        // pop 出来，所有权在它手里；静态存储永不移动）。
-        let slot = unsafe { &*ptr.cast::<TaskSlot<F>>() };
+        // pop 出来），且 Ready -> Running 转换保证没有别的核心持有引用，
+        // 因此这里的 `&mut` 是独占的；静态存储永不移动。
+        let slot = unsafe { &mut *ptr.cast::<TaskSlot<F>>() };
         // Waker 携带任务指针以便重入队；静态 future 不移动，直接 pin。
         let waker =
             unsafe { Waker::from_raw(RawWaker::new(ptr as *const (), &VTABLE)) };
@@ -127,8 +131,16 @@ impl<F: SafeFuture> StaticFuture<StaticCell<F>> {
         }
     }
 
+    /// Returns the pinned inner future for polling.
+    ///
+    /// # Safety
+    /// Requires `&mut` (not `&`): handing out `&mut F` from a shared
+    /// reference would allow aliasing. Callers must hold exclusive access --
+    /// in practice only [`run_task`](crate::no_alloc::executor), which
+    /// reaches this point through the Ready -> Running transition that
+    /// guarantees no other core is polling the same task.
     #[inline(always)]
-    pub unsafe fn get_mut(&self) -> &mut F {
+    pub unsafe fn get_mut(&mut self) -> &mut F {
         unsafe {
             let addr = self.0.get().read();
             debug_assert_ne!(addr, 0, "Future is not initialized");

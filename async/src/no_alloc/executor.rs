@@ -198,7 +198,14 @@ impl Executor {
     }
 
     #[inline(always)]
-    pub fn add(&self, ptr: *mut TaskHeader) {
+    /// Registers a task for execution.
+    ///
+    /// # Safety
+    /// Same contract as [`Queue::push`](crate::no_alloc::lifo::Queue::push):
+    /// `ptr` must point at a live task header that outlives its time in the
+    /// queue. Re-registering an already-live task is safe (duplicates
+    /// collapse in [`run_task`](Self::run_task)).
+    pub unsafe fn add(&self, ptr: *mut TaskHeader) {
         let head = unsafe { &*ptr };
         // Initialized -> Ready 只做一次；已活任务的重入队是允许的
         // （唤醒路径也会推；重复条目在 run_task 里按状态塌缩）。
@@ -246,6 +253,8 @@ impl Executor {
     }
 
     fn run_task(&self, ptr: *mut TaskHeader) {
+        // SAFETY: popped from our own queue, so the pointer is live
+        // (push requires liveness) or a harmless duplicate (collapsed below).
         let head = unsafe { &*ptr };
 
         // 只有 Ready -> Running 的条目才 poll：队列里重复的（唤醒又推了一份）
@@ -278,7 +287,9 @@ impl Executor {
             // Pending 的任务自己续上（round-robin；和 nano 语义一致），
             // 中断唤醒走 waker 路径加速。
             head.state.store(State::Ready.into(), Ordering::Release);
-            let _ = self.worker.push(ptr);
+            // SAFETY: ptr is live (just polled) and stays alive past requeue
+            // by the push contract (static storage outlives the executor).
+            let _ = unsafe { self.worker.push(ptr) };
         }
     }
 }

@@ -78,3 +78,36 @@ unsafe fn waker_wake_by_ref(ptr: *const ()) {
 unsafe fn waker_drop(_ptr: *const ()) {
     // 静态内存任务不需要手动释放内存
 }
+#[cfg(test)]
+mod tests {
+    use super::WakePolicy;
+
+    /// 控制字节解包矩阵：策略位只取 00/01/10（`0b11` 是契约外输入，
+    /// 上游 `unpack` 按不可达处理；这里只覆盖可达组合）× 唤醒位。
+    #[test]
+    fn unpack_matrix() {
+        for policy in [0b00u8, 0b01, 0b10] {
+            for waked in [0u8, WakePolicy::WAKE_BIT] {
+                let raw = policy | waked | 0b0011_0100; // 高位杂散不影响解包
+                let (p, w) = WakePolicy::unpack(raw);
+                assert_eq!(w, waked != 0);
+                match policy {
+                    0b00 => assert_eq!(p, WakePolicy::PollOnly),
+                    0b01 => assert_eq!(p, WakePolicy::InterruptOnly),
+                    _ => assert_eq!(p, WakePolicy::Hybrid),
+                }
+            }
+        }
+    }
+
+    /// 调度语义：PollOnly/Hybrid 永远跑；InterruptOnly 只在被唤醒后跑。
+    #[test]
+    fn should_poll_matrix() {
+        assert!(WakePolicy::PollOnly.should_poll(false));
+        assert!(WakePolicy::PollOnly.should_poll(true));
+        assert!(!WakePolicy::InterruptOnly.should_poll(false));
+        assert!(WakePolicy::InterruptOnly.should_poll(true));
+        assert!(WakePolicy::Hybrid.should_poll(false));
+        assert!(WakePolicy::Hybrid.should_poll(true));
+    }
+}

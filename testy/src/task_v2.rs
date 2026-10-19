@@ -22,7 +22,8 @@ extern "efiapi" fn process(arg: *mut c_void) {
     
     let executor = Executor::new(core_id);
 
-    executor.add(async_fun());
+    // SAFETY: `async_fun` 初始化静态池里的空槽并返回活指针，executor 接管其生命周期。
+    unsafe { executor.add(async_fun()) };
 
     executor.run();
 }

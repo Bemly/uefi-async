@@ -81,7 +81,9 @@ extern "efiapi" fn process(arg: *mut c_void) {
     let duration_ticks = tps * 2;
     while tick() - start_tick < duration_ticks {
         for _ in 0..10 {
-            let _ = worker.push(ops as *mut TaskHeader);
+            // SAFETY: 吞吐基准，压入的只是计数器数值 ballast，从不解引用
+            //（pop 出来直接 black_box 计数）；队列本身只搬运指针值。
+            let _ = unsafe { worker.push(ops as *mut TaskHeader) };
             ops += 1;
         }
         let target_id = (core_id + 1) % ctx.num_cores;

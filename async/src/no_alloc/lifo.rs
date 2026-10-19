@@ -108,7 +108,14 @@ impl<const N: usize> Worker<N> {
         let (pop_count, head) = unpack(self.0.stealer_data.pop_count_and_head.load(Relaxed));
         push_count.wrapping_sub(pop_count) == head
     }
-    pub fn push(&self, item: *mut TaskHeader) -> Result<(), *mut TaskHeader> {
+    /// Pushes a task pointer into the queue.
+    ///
+    /// # Safety
+    /// The pointer must point at a live [`TaskHeader`](crate::no_alloc::task::TaskHeader)
+    /// that stays alive until it is popped (or the queue is dropped). Pushing
+    /// the same live task twice is tolerated (duplicates collapse in the
+    /// executor), but pushing a dangling pointer is instant UB on pop.
+    pub unsafe fn push(&self, item: *mut TaskHeader) -> Result<(), *mut TaskHeader> {
         let push_count = self.0.push_count.load(Relaxed);
         let pop_count_and_head = self.0.stealer_data.pop_count_and_head.load(Acquire);
         let (pop_count, head) = unpack(pop_count_and_head);
