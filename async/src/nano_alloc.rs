@@ -18,8 +18,8 @@ pub mod control;
 /// 2. A `TaskNode` initialization with a pinned function and frequency.
 /// 3. A registration call adding the node to the specified executor.
 ///
-/// # Example Input
-/// ```rust, no_run
+/// # Example Input (fragment, not standalone code)
+/// ```text
 /// executor => {
 ///     100 -> task_one(),
 ///     my_config.interval -> || { do_work() }

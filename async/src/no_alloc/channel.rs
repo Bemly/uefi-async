@@ -7,19 +7,23 @@
 //! thread-safety and multi-core scalability without the need for a global allocator.
 //!
 //! ### Usage
-//! ```rust
-//! // Define a static queue in the global or local scope
-//! static SHARED_QUEUE: Queue<MyEvent, 64> = Queue::new();
+//! ```rust,no_run
+//! # use uefi_async::no_alloc::channel::{channel, Receiver, Sender};
+//! # use nblfq::Queue;
+//! # #[derive(Clone, Copy)]
+//! # enum MyEvent { Ping }
+//! # async fn _ex() {
+//! // A queue can live in a local scope (a `static` one needs `Box::leak`,
+//! // as `nblfq::Queue` is `!Sync`; see `testy` for that pattern).
+//! let queue = Queue::<MyEvent, 64>::new();
+//! let (tx, rx) = channel(&queue);
 //!
-//! async fn example() {
-//!     let (tx, rx) = channel(&SHARED_QUEUE);
+//! // Send an item asynchronously
+//! tx.send(MyEvent::Ping).await.ok();
 //!
-//!     // Send an item asynchronously
-//!     tx.send(MyEvent::Ping).await.ok();
-//!
-//!     // Receive an item asynchronously
-//!     let event = rx.recv().await;
-//! }
+//! // Receive an item asynchronously
+//! let event = rx.recv().await;
+//! # }
 //! ```
 
 use core::future::Future;

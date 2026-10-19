@@ -13,6 +13,8 @@ pub mod single {
     /// `Signal` allows one asynchronous task to notify another task and optionally pass data.
     /// In a single-core, cooperative multitasking environment like UEFI, it acts as a
     /// lightweight "oneshot" channel without the need for complex locking or heap-allocated wakers.
+    /// Single-core only (`RefCell` is `!Sync`): share via `&` borrows within one executor.
+    /// For cross-core use [`MultiCoreSignal`](crate::common::signal::multiple::MultiCoreSignal).
     ///
     /// # Design
     /// The signal uses a `RefCell` to store data. The `wait()` method produces a `Future`
@@ -20,21 +22,25 @@ pub mod single {
     ///
     /// # Examples
     ///
-    /// ```rust
-    /// // Defined as a static or shared resource
-    /// static ASSET_LOADED: Signal<TextureHandle> = Signal::new();
-    ///
-    /// async fn background_loader() {
+    /// ```rust,no_run
+    /// # use uefi_async::common::signal::single::Signal;
+    /// # struct TextureHandle;
+    /// # async fn load_texture_gop(_: &str) -> TextureHandle { TextureHandle }
+    /// # async fn draw_to_screen(_: TextureHandle) {}
+    /// # async fn _ex() {
+    /// # let asset_loaded = Signal::<TextureHandle>::new();
+    /// async fn background_loader(asset: &Signal<TextureHandle>) {
     ///     let texture = load_texture_gop("logo.bmp").await;
     ///     // Notify the renderer that the texture is ready
-    ///     ASSET_LOADED.signal(texture);
+    ///     asset.signal(texture);
     /// }
     ///
-    /// async fn renderer_task() {
+    /// async fn renderer_task(asset: &Signal<TextureHandle>) {
     ///     // Suspend execution until the signal is triggered
-    ///     let texture = ASSET_LOADED.wait().await;
-    ///     draw_to_screen(texture);
+    ///     let texture = asset.wait().await;
+    ///     draw_to_screen(texture).await;
     /// }
+    /// # }
     /// ```
     #[derive(Debug)]
     pub struct Signal<Data> (RefCell<Option<Data>>);
@@ -104,7 +110,8 @@ pub mod single {
         /// Returns a future that resolves when the signal is triggered.
         ///
         /// # Example
-        /// ```rust
+        /// ```rust,no_run
+        /// # use uefi_async::common::signal::single::UnsafeSignal;
         /// static ASYNC_EVENT: UnsafeSignal<u32> = UnsafeSignal::new();
         ///
         /// // In Task A:
@@ -156,6 +163,10 @@ pub mod multiple {
     /// # Examples
     ///
     /// ```rust,no_run
+    /// # use uefi_async::common::signal::multiple::MultiCoreSignal;
+    /// # use uefi_async::Yield;
+    /// # async fn do_physics_calc() {}
+    /// # async fn draw_frame(_: u64) {}
     /// static RENDER_SIGNAL: MultiCoreSignal<u64> = MultiCoreSignal::new();
     ///
     /// /// Producer: Runs physics calculations and notifies the renderer

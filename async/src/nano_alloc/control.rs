@@ -21,8 +21,14 @@ pub mod single {
         /// and is intended for tasks that perform side effects (returning `()`).
         ///
         /// # Examples
-        /// ```
+        /// ```rust,no_run
+        /// # use uefi_async::nano_alloc::control::single::join::join;
+        /// # async fn task_one() {}
+        /// # async fn task_two() {}
+        /// # async fn do_something() {}
+        /// # async fn _ex() {
         /// join!(task_one(), task_two(), async { do_something().await }).await;
+        /// # }
         /// ```
         pub use uefi_async_macros::join;
 
@@ -32,11 +38,16 @@ pub mod single {
         /// Otherwise, it waits until all tasks complete successfully.
         ///
         /// # Examples
-        /// ```
+        /// ```rust,no_run
+        /// # use uefi_async::nano_alloc::control::single::join::try_join;
+        /// # async fn disk_load() -> Result<(), ()> { Ok(()) }
+        /// # async fn network_fetch() -> Result<(), ()> { Ok(()) }
+        /// # async fn _ex() {
         /// let result = try_join!(disk_load(), network_fetch()).await;
         /// if result.is_err() {
         ///     println!("One of the tasks failed!");
         /// }
+        /// # }
         /// ```
         pub use uefi_async_macros::try_join;
 
@@ -47,9 +58,17 @@ pub mod single {
         /// standard tuple of results.
         ///
         /// # Examples
-        /// ```
+        /// ```rust,no_run
+        /// # use uefi_async::nano_alloc::control::single::join::join_all;
+        /// # async fn load_mesh() -> u32 { 0 }
+        /// # async fn load_texture() -> u32 { 0 }
+        /// # async fn _ex() {
+        /// # struct Engine;
+        /// # impl Engine { fn draw(&self, _: u32, _: u32) {} }
+        /// # let render_engine = Engine;
         /// let (mesh, texture) = join_all!(load_mesh(), load_texture()).await;
         /// render_engine.draw(mesh, texture);
+        /// # }
         /// ```
         pub use uefi_async_macros::join_all;
 
@@ -168,11 +187,18 @@ pub mod single {
         /// timeouts or interrupting long-running tasks.
         ///
         /// # Examples
-        /// ```rust, no_run
+        /// ```rust,no_run
+        /// # use uefi_async::nano_alloc::control::single::select::select;
+        /// # use uefi_async::nano_alloc::time::_WaitTimer;
+        /// # async fn get_keypress() {}
+        /// # async fn handle_input() {}
+        /// # async fn render_frame() {}
+        /// # async fn _ex() {
         /// select! {
-        ///     get_keypress() => handle_input(key) // User pressed a key
-        ///     16.ms()        => render_frame(),   // Timed out, render next frame
+        ///     get_keypress() => { handle_input().await },
+        ///     16.ms() => { render_frame().await },
         /// }
+        /// # }
         /// ```
         pub use uefi_async_macros::select;
 
@@ -187,11 +213,17 @@ pub mod single {
         /// The remaining futures are dropped immediately, which is useful for implementing
         /// timeouts or interrupting long-running tasks.
         /// # Examples
-        /// ```rust, no_run
+        /// ```rust,no_run
+        /// # use uefi_async::nano_alloc::control::single::select::{select, Select};
+        /// # use uefi_async::nano_alloc::time::_WaitTimer;
+        /// # async fn get_keypress() {}
+        /// # async fn render_frame() {}
+        /// # async fn _ex() {
         /// select! {
-        ///     get_keypress() => handle_input(key) // User pressed a key
-        ///     16.ms()        => render_frame(),   // Timed out, render next frame
+        ///     get_keypress() => {},
+        ///     16.ms() => { render_frame().await },
         /// }
+        /// # }
         /// ```
         #[pin_project]
         pub struct Select<H, T> {

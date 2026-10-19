@@ -14,7 +14,9 @@ use core::task::{Context, Poll};
 /// to the [`Executor`]. It ensures other tasks (like input handling) can run.
 ///
 /// # Example
-/// ```rust
+/// ```rust,no_run
+/// # use uefi_async::YIELD;
+/// # async fn do_work(_: i32) {}
 /// async fn heavy_computation() {
 ///     for i in 0..1000 {
 ///         do_work(i);
@@ -31,7 +33,9 @@ pub const YIELD: _Yield = _Yield(false);
 /// to the [`Executor`]. It ensures other tasks (like input handling) can run.
 ///
 /// # Example
-/// ```rust
+/// ```rust,no_run
+/// # use uefi_async::yield_now;
+/// # async fn do_work(_: i32) {}
 /// async fn heavy_computation() {
 ///     for i in 0..1000 {
 ///         do_work(i);
@@ -49,7 +53,9 @@ pub async fn yield_now() { _Yield(false).await }
 /// to the [`Executor`]. It ensures other tasks (like input handling) can run.
 ///
 /// # Example
-/// ```rust
+/// ```rust,no_run
+/// # use uefi_async::Yield;
+/// # async fn do_work(_: i32) {}
 /// async fn heavy_computation() {
 ///     for i in 0..1000 {
 ///         do_work(i);
@@ -82,7 +88,9 @@ impl Future for _Yield {
 /// on every single tick of the executor.
 ///
 /// # Example
-/// ```rust
+/// ```rust,no_run
+/// # use uefi_async::Skip;
+/// # async fn check_background_logs() {}
 /// async fn background_task() {
 ///     loop {
 ///         // Only run once every 10 scheduler passes
@@ -139,12 +147,16 @@ impl Pacer {
     /// Useful for "one-shot" delays or preventing a task from starting too early.
     ///
     /// # Example
-    /// ```rust
+    /// ```rust,no_run
+    /// # use uefi_async::Pacer;
+    /// # async fn do_work() {}
+    /// # async fn _ex() {
     /// let mut pacer = Pacer::new(100);
     /// loop {
     ///     pacer.throttle().await; // Waits 100 ticks once, then yields every loop iteration.
     ///     do_work();
     /// }
+    /// # }
     /// ```
     #[inline(always)]
     pub async fn throttle(&mut self) { self.step(0, false).await }
@@ -154,12 +166,16 @@ impl Pacer {
     /// This is the standard way to implement cooperative multitasking for background tasks.
     ///
     /// # Example
-    /// ```rust
+    /// ```rust,no_run
+    /// # use uefi_async::Pacer;
+    /// # async fn process_physics() {}
+    /// # async fn _ex() {
     /// let mut pacer = Pacer::new(60);
     /// loop {
     ///     process_physics();
     ///     pacer.repeat().await; // Yields to other tasks once every 60 iterations.
     /// }
+    /// # }
     /// ```
     #[inline(always)]
     pub async fn repeat(&mut self) { self.step(0, true).await }
@@ -170,12 +186,16 @@ impl Pacer {
     /// higher-priority tasks (like UI or Input) after a burst of work.
     ///
     /// # Example
-    /// ```rust
+    /// ```rust,no_run
+    /// # use uefi_async::Pacer;
+    /// # async fn load_resource_chunk() {}
+    /// # async fn _ex() {
     /// let mut pacer = Pacer::new(10);
     /// loop {
     ///     load_resource_chunk();
     ///     pacer.burst(5).await; // Every 10 chunks, skip 5 scheduling passes.
     /// }
+    /// # }
     /// ```
     #[inline(always)]
     pub async fn burst(&mut self, i: usize) { self.step(i, true).await }

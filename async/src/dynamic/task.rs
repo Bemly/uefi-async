@@ -69,3 +69,18 @@ impl<'a> TaskNode<'a> {
         self.freq.store(freq_hz, Ordering::Release);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::TaskNode;
+
+    /// 频率换算矩阵：60Hz/1MHz 基准 + 0 频率/0 基准兜底（不除零 panic）。
+    #[test]
+    fn ticks_matrix() {
+        assert_eq!(TaskNode::ticks(60, 1_000_000), 16666);
+        assert_eq!(TaskNode::ticks(1, 1_000_000), 1_000_000);
+        assert_eq!(TaskNode::ticks(0, 1_000_000), 0);
+        assert_eq!(TaskNode::ticks(60, 0), 0);
+        assert_eq!(TaskNode::ticks(120, 1_000), 8);
+    }
+}

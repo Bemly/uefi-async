@@ -26,10 +26,11 @@ pub mod single {
         ///
         /// # Examples
         ///
-        /// ```rust
+        /// ```rust,no_run
+        /// # use uefi_async::nano_alloc::channel::single::oneshot::{Oneshot, OneShotReceiver};
         /// async fn example() {
         ///     // 1. Create a channel pair
-        ///     let (tx, rx) = oneshot::new::<u64>();
+        ///     let (tx, rx): (_, OneShotReceiver<u64>) = Oneshot::new();
         ///
         ///     // 2. The Receiver waits for data without blocking the entire system
         ///     // In a real scenario, tx would be moved into a separate TaskNode
@@ -92,30 +93,31 @@ pub mod single {
         /// # Examples
         ///
         /// ```rust,no_run
+        /// # use uefi_async::nano_alloc::channel::single::unbounded_channel::{ChannelReceiver, ChannelSender};
+        /// # use uefi_async::Yield;
+        /// # enum KeyEvent { ScanCode(u8) }
+        /// # async fn poll_uefi_key() -> Option<KeyEvent> { None }
+        /// # async fn render_game(_: KeyEvent) {}
+        /// # async fn _ex(mut rx: ChannelReceiver<KeyEvent>, tx: ChannelSender<KeyEvent>) {
         /// // Main logic consuming events
-        /// async fn main_logic(mut rx: ChannelReceiver<KeyEvent>) {
-        ///     loop {
-        ///         // If the queue is empty, .await will yield control back to the executor (Pending).
-        ///         // Once data is pushed by a sender, the task is re-polled and returns Ready.
-        ///         let key = rx.await;
-        ///         match key {
-        ///             KeyEvent::ScanCode(0x01) => break, // Exit on ESC key
-        ///             _ => render_game(key),
-        ///         }
+        /// loop {
+        ///     // If the queue is empty, .await will yield control back to the executor (Pending).
+        ///     // Once data is pushed by a sender, the task is re-polled and returns Ready.
+        ///     let key = (&mut rx).await;
+        ///     match key {
+        ///         KeyEvent::ScanCode(0x01) => break, // Exit on ESC key
+        ///         _ => render_game(key).await,
         ///     }
         /// }
-        ///
-        /// // Input task producing events
-        /// async fn input_poller(tx: ChannelSender<KeyEvent>) {
-        ///     loop {
-        ///         if let Some(key) = poll_uefi_key() {
-        ///             // Synchronously push data into the channel
-        ///             tx.send(key);
-        ///         }
-        ///         // Yield execution to allow the main_logic or other tasks to run
-        ///         Yield.await;
+        /// loop {
+        ///     if let Some(key) = poll_uefi_key().await {
+        ///         // Synchronously push data into the channel
+        ///         tx.send(key);
         ///     }
+        ///     // Yield execution to allow the main_logic or other tasks to run
+        ///     Yield.await;
         /// }
+        /// # }
         /// ```
         pub fn channel<Data>() -> (ChannelSender<Data>, ChannelReceiver<Data>) {
             let queue = Rc::new(RefCell::new(VecDeque::new()));
@@ -166,7 +168,9 @@ pub mod single {
         /// or where the `Sender` is not used after the `Receiver` is dropped.
         ///
         /// # Example
-        /// ```rust,no_run
+        ///
+        /// Illustrative wiring (needs a live executor; see `testy` for a runnable version):
+        /// ```text
         /// // 1. Create a channel for keyboard events with a capacity of 32
         /// let (tx, mut rx) = bounded_channel::<Key>(32);
         ///
@@ -254,22 +258,28 @@ pub mod multiple {
         ///
         /// # Usage
         ///
-        /// ```rust
+        /// ```rust,no_run
+        /// # use uefi_async::nano_alloc::channel::multiple::oneshot::Oneshot;
+        /// # struct TextureHandle;
+        /// # async fn heavy_physics_calculation() -> TextureHandle { TextureHandle }
+        /// # async fn update_gpu_buffer(_: TextureHandle) {}
+        /// # async fn _ex() {
         /// // Example: Multi-core synchronization
         /// // Core 1 performs heavy physics while Core 0 handles rendering.
         /// let (tx, rx) = Oneshot::new();
         ///
         /// // Inside Core 1's executor:
         /// async move {
-        ///     let result = heavy_physics_calculation();
+        ///     let result = heavy_physics_calculation().await;
         ///     tx.send(result); // Signal completion and send data
         /// };
         ///
         /// // Inside Core 0's executor:
         /// async move {
         ///     let data = rx.await; // Suspends execution until Core 1 sends the data
-        ///     update_gpu_buffer(data);
+        ///     update_gpu_buffer(data).await;
         /// };
+        /// # }
         /// ```
         #[derive(Debug)]
         pub struct Oneshot<Data>(Arc<Mutex<Option<Data>>>);
@@ -338,12 +348,18 @@ pub mod multiple {
         /// # Usage
         ///
         /// ```rust,no_run
+        /// # use uefi_async::nano_alloc::channel::multiple::unbounded_channel::{self, ChannelReceiver, ChannelSender};
+        /// # use uefi_async::Yield;
+        /// # struct PhysicsResult;
+        /// # async fn heavy_physics_calculation() -> PhysicsResult { PhysicsResult }
+        /// # async fn update_gpu_buffer(_: PhysicsResult) {}
+        /// # async fn _ex() {
         /// // Example: Producer task on Core 1, Consumer task on Core 0
         /// let (tx, rx) = unbounded_channel::channel::<PhysicsResult>();
         ///
         /// // Task running on Core 1's executor
         /// async fn producer(tx: ChannelSender<PhysicsResult>) {
-        ///     let result = heavy_physics_calculation();
+        ///     let result = heavy_physics_calculation().await;
         ///     tx.send(result); // Non-blocking atomic push
         /// }
         ///
@@ -352,8 +368,9 @@ pub mod multiple {
         ///     // This will return Poll::Pending and yield CPU if the queue is empty,
         ///     // allowing the executor to run other tasks (like UI rendering).
         ///     let data = rx.await;
-        ///     update_gpu_buffer(data);
+        ///     update_gpu_buffer(data).await;
         /// }
+        /// # }
         /// ```
         pub fn channel<Data>()
             -> (ChannelSender<Data>, ChannelReceiver<Data>) {
@@ -412,12 +429,17 @@ pub mod multiple {
         ///
         /// # Usage Example
         ///
-        /// ```rust
+        /// ```rust,no_run
+        /// # use uefi_async::nano_alloc::channel::multiple::bounded_channel::{ChannelReceiver, ChannelSender};
+        /// # struct FrameData;
+        /// # async fn draw_frame(_: FrameData) {}
+        /// # async fn calculate_physics() -> FrameData { FrameData }
+        /// # async fn _ex() {
         /// // In UEFI Core 0 (Rendering Task)
-        /// async fn render_task(rx: ChannelReceiver<FrameData>) {
+        /// async fn render_task(mut rx: ChannelReceiver<FrameData>) {
         ///     loop {
         ///         // Suspends the task if the queue is empty, allowing other tasks to run.
-        ///         let data = rx.await;
+        ///         let data = (&mut rx).await;
         ///         draw_frame(data);
         ///     }
         /// }
@@ -425,12 +447,13 @@ pub mod multiple {
         /// // In UEFI Core 1 (Physics Task)
         /// async fn physics_task(tx: ChannelSender<FrameData>) {
         ///     loop {
-        ///         let frame = calculate_physics();
+        ///         let frame = calculate_physics().await;
         ///         // If the queue is full, it yields control back to the executor
         ///         // and retries on the next polling cycle.
         ///         tx.send_async(frame).await;
         ///     }
         /// }
+        /// # }
         /// ```
         pub fn channel<Data>(cap: usize) -> (ChannelSender<Data>, ChannelReceiver<Data>) {
             let queue = Arc::new(ArrayQueue::new(cap));

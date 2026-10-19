@@ -11,8 +11,8 @@ use core::task::{Context, Poll};
 /// # Examples
 ///
 /// ```rust,no_run
-/// use uefi_async::nano_alloc::time::Timeout;
-///
+/// # use core::time::Duration;
+/// # use uefi_async::nano_alloc::time::{Timeout, _Timeout};
 ///  async fn calc_1() {}
 ///  async fn calc_2() {
 ///     match Box::pin(calc_2()).timeout(Duration::from_secs(2).as_secs()).await { _ => () }
@@ -82,6 +82,7 @@ impl<F: Future + Sized> _Timeout<'_> for F {}
 ///
 /// Using the builder-style methods:
 /// ```rust,no_run
+/// # use uefi_async::nano_alloc::time::WaitTimer;
 /// async fn delay_example() {
 ///     // Create a timer for 500 milliseconds
 ///     WaitTimer::from_ms(500).await;
@@ -90,8 +91,7 @@ impl<F: Future + Sized> _Timeout<'_> for F {}
 ///
 /// Using the [`_WaitTimer`] extension trait for a more expressive DSL:
 /// ```rust,no_run
-/// use uefi_async::nano_alloc::time::{WaitTimer, _WaitTimer};
-///
+/// # use uefi_async::nano_alloc::time::{WaitTimer, _WaitTimer};
 /// async fn blink_led_task() {
 ///     loop {
 ///         // Highly readable duration syntax

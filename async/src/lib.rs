@@ -29,7 +29,7 @@
 //! 
 //! Support for human-readable time units and hardware-aligned synchronization.
 //! 
-//! ```rust
+//! ```text
 //! async fn timer() {
 //!     WaitTimer::from_ms(500).await; // Explicit timer
 //!     2.year().await;                // Natural language units
@@ -49,7 +49,7 @@
 //! * **`join_all!`**: Collects results from all tasks into a flattened tuple.
 //! * **Trait-based Joins**: Call `.join().await` or `.try_join().await` directly on Tuples, Arrays, or Vectors.
 //! 
-//! ```rust
+//! ```text
 //! async fn calc_1() {}
 //! async fn calc_2() {}
 //! async fn async_task() {
@@ -63,7 +63,7 @@
 //! 
 //! ### 3. Timeouts and Guarding
 //! 
-//! ```rust
+//! ```text
 //! async fn timeout_example() {
 //!     // Built-in timeout support for any Future
 //!     match my_task().timeout(500).await {
@@ -78,7 +78,7 @@
 //! 
 //! `Pacer` allows you to strictly control the "rhythm" of your loops, essential for smooth 3D rendering or UI animations.
 //! 
-//! ```rust
+//! ```text
 //! async fn paced_loop() {
 //!     let mut pacer = Pacer::new(60); // Target 60 FPS
 //!     loop {
@@ -93,7 +93,7 @@
 //! 
 //! Synchronization Primitives are lightweight, zero-cost and safe for asynchronous communication and synchronization.
 //! 
-//! ```rust
+//! ```text
 //! // 1. Create a channel for keyboard events with a capacity of 32
 //! extern "efiapi" fn process(arg: *mut c_void) {
 //!     let (tx, mut rx) = bounded_channel::<Key>(32);
@@ -146,7 +146,7 @@
 //! This includes **Structured Concurrency** to spawn, join, or cancel tasks across different schedulers,
 //! and **Priority Steering** to direct critical tasks to specific cores.
 //! 
-//! ```rust
+//! ```text
 //! static ASSET_LOADED: Signal<TextureHandle> = Signal::new();
 //! 
 //! async fn background_loader() {
@@ -184,7 +184,7 @@
 //! 
 //! Use the `add!` macro to set up your executor.
 //! 
-//! ```rust
+//! ```text
 //! extern crate alloc;
 //! use alloc::boxed::Box;
 //! use uefi_async::nano_alloc::{Executor, TaskNode};
@@ -205,7 +205,7 @@
 //! 
 //! or more advanced usage:
 //! 
-//! ```rust
+//! ```text
 //! extern crate alloc;
 //! use uefi_async::nano_alloc::{Executor, add};
 //! use uefi_async::util::tick;
@@ -250,7 +250,7 @@
 //! 
 //! ### 3. Using various control flows, signals, and tunnels...
 //! 
-//! ```rust
+//! ```text
 //! // Example: Producer task on Core 1, Consumer task on Core 0
 //! extern "efiapi" fn process(arg: *mut c_void) {
 //!     if arg.is_null() { return }
@@ -331,7 +331,8 @@
 //! MIT or Apache-2.0.
 
 #![warn(unreachable_pub)]
-#![no_std]
+//! host 单测（`cargo test`）时用 std 跑纯逻辑；UEFI 目标保持 no_std。
+#![cfg_attr(not(test), no_std)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
 #[cfg(any(feature = "nano-alloc", feature = "alloc"))]
