@@ -22,6 +22,45 @@ Features
 * **Multicore-Ready**: Thread-safe primitives for cross-core signaling and data synchronization.
 
 --------------------------------
+Allocators & Executors
+--------------------------------
+
+One crate, four lines. Pick by how much heap (and how many cores) you have.
+All four build on all UEFI targets (`x86_64` / `aarch64` / `i686`).
+
+| Feature | Executor | Tasks | Needs heap | Best for |
+|---|---|---|---|---|
+| `nano-alloc` (default) | intrusive linked list, borrowed `&mut TaskNode` | `Box::pin` + `add!` macro | yes (nodes) | single-core loops, U盘小工具 |
+| `alloc` (`dynamic`) | work-stealing queues (`st3`), Box-owned | `spawn` / `cancel` / `set_freq`, steal across cores | yes (nodes + queues) | multicore, dynamic lifetimes |
+| `static` | static pools (`StaticCell`), Embassy-style | pre-registered, `run()` polls + steals | **no** | heapless drivers / early boot |
+| `global-allocator` | — (talc backend for UEFI) | — | provides it | one-line `alloc_init_wrapper()` / `init_with_pages(n)` |
+
+`nano-alloc` and `dynamic` share the same control vocabulary (`join!`,
+`select!`, `Timeout`, `WaitTimer`, `Pacer`, channels, `AsyncMutex`),
+so switching lines mostly means switching how tasks are *held*, not how
+they are *written*.
+
+```rust
+use uefi_async::dynamic::Executor;
+
+let mut net = Executor::new();          // per-core executor
+net.add_stealer(gpu_worker.stealer());  // cross-core balancing
+
+let id = net.spawn(Box::pin(async move {
+    load_texture().await;
+}), 60).expect("queue full");           // 60 Hz
+net.set_freq(id, 30);                   // retune live
+net.cancel(id);                         // cooperative cancel, reaped next poll
+```
+
+Heap note: `global-allocator` starts **empty** (a `ClaimOnOom` talc span)
+and must be claimed before the first `Box` — `alloc_init_wrapper()` claims
+a default 64MiB; bigger workloads call `UefiTalc::init_with_pages(n)`.
+If your app already has a global allocator (e.g. `uefi`'s own), enable only
+`nano-alloc`/`alloc`/`static` and skip `global-allocator` (two globals do
+not link).
+
+--------------------------------
 Tiny Async Control Flow
 --------------------------------
 
