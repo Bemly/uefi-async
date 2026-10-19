@@ -12,6 +12,7 @@ use uefi::boot::{create_event, get_handle_for_protocol, get_image_file_system, i
 use uefi::fs::FileSystem;
 use uefi::{cstr16, println};
 use uefi::proto::pi::mp::MpServices;
+use uefi_async::common::tick;
 
 #[repr(C)]
 struct Context<'bemly_> {
@@ -69,18 +70,14 @@ pub unsafe fn benchmark() {
     process(arg_ptr);
 }
 
-#[inline(always)]
-fn time() -> u64 {
-    unsafe { core::arch::x86_64::_rdtsc() }
-}
-
+/// 复用库里的多架构时钟（x86/x86_64 RDTSC，aarch64 CNTVCT），不另起重复实现。
 static TICKS_PER_SECOND: AtomicU64 = AtomicU64::new(0);
 
 fn calibrate_tsc() {
-    let start = time();
+    let start = tick();
     // Stall 使用微秒 (microseconds) 为单位
     stall(Duration::from_micros(100_000));
-    let end = time();
+    let end = tick();
 
     let ticks_per_100ms = end - start;
     // 换算成 1 秒的频率
@@ -102,13 +99,13 @@ extern "efiapi" fn process(arg: *mut c_void) {
 
     ALL_CORE_READY.wait();
 
-    let start_tick = time();
+    let start_tick = tick();
     let mut ops: u64 = 0;
 
     let tps = TICKS_PER_SECOND.load(Ordering::Acquire);
     let duration_ticks = tps * 2;
 
-    while time() - start_tick < duration_ticks {
+    while tick() - start_tick < duration_ticks {
         // 生产与消费逻辑
         for _ in 0..10 {
             let _ = worker.push(ops as usize);
@@ -135,7 +132,7 @@ extern "efiapi" fn process(arg: *mut c_void) {
         (*ctx.scores)[core_id] = ops;
     }
 
-    let actual_end_tick = time();
+    let actual_end_tick = tick();
     let actual_elapsed_ticks = actual_end_tick - start_tick;
 
     // 等待所有核心完成压测
