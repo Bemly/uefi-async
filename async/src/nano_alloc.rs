@@ -9,7 +9,6 @@ pub mod time;
 pub mod uefi;
 pub mod channel;
 pub mod control;
-mod stream;
 
 /// Procedural macro logic to initialize and register task nodes to executors.
 ///

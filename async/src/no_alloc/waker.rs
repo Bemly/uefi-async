@@ -41,8 +41,8 @@ impl WakePolicy {
 
 
 
-// Waker 的虚函数表
-static VTABLE: RawWakerVTable = RawWakerVTable::new(
+// Waker 的虚函数表（`task::TaskSlot::poll` 用它构造重入队 Waker）。
+pub(crate) static VTABLE: RawWakerVTable = RawWakerVTable::new(
     waker_clone,
     waker_wake,
     waker_wake_by_ref,

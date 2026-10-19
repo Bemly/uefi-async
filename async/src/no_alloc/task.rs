@@ -29,9 +29,11 @@ use core::ops::Deref;
 use core::pin::Pin;
 use core::ptr::{drop_in_place, from_mut, from_ref, with_exposed_provenance_mut, write};
 use core::sync::atomic::{AtomicU8, Ordering};
-use core::task::{Context, Poll, Waker};
+use core::task::{Context, Poll, RawWaker, Waker};
 use num_enum::{FromPrimitive, IntoPrimitive};
 use static_cell::StaticCell;
+
+use crate::no_alloc::waker::VTABLE;
 
 pub trait SafeFuture: Future<Output = ()> + 'static + Send + Sync {}
 impl<T: Future<Output = ()> + 'static + Send + Sync> SafeFuture for T {}
@@ -84,19 +86,19 @@ impl<F: SafeFuture> TaskSlot<F> {
 
     // 包装函数：将 *mut TaskHeader 转回 TaskSlot<F> 并执行
     pub unsafe fn poll(ptr: *mut TaskHeader) -> bool {
+        // SAFETY: 调用方保证 ptr 指向活的 TaskSlot<F>（run_task 刚从队列里
+        // pop 出来，所有权在它手里；静态存储永不移动）。
         let slot = unsafe { &*ptr.cast::<TaskSlot<F>>() };
-
-        // let waker = unsafe { Waker::from_raw() };
-        // let mut ctx = Context::from_waker(&waker);
-        //
-        // // SAFETY: static future, no move
-        // let future = unsafe { Pin::new_unchecked(slot.future.get_mut()) };
-        //
-        // match future.poll(&mut ctx) {
-        //     Poll::Ready(_) => true,
-        //     Poll::Pending => false,
-        // }
-        todo!("TaskSlot::poll")
+        // Waker 携带任务指针以便重入队；静态 future 不移动，直接 pin。
+        let waker =
+            unsafe { Waker::from_raw(RawWaker::new(ptr as *const (), &VTABLE)) };
+        let mut cx = Context::from_waker(&waker);
+        // SAFETY: 静态存储永不移动，pin 住直接 poll。
+        let future = unsafe { Pin::new_unchecked(slot.future.get_mut()) };
+        match future.poll(&mut cx) {
+            Poll::Ready(_) => true,
+            Poll::Pending => false,
+        }
     }
 }
 impl<F: SafeFuture> StaticFuture<StaticCell<F>> {

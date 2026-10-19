@@ -200,9 +200,14 @@ impl Executor {
     #[inline(always)]
     pub fn add(&self, ptr: *mut TaskHeader) {
         let head = unsafe { &*ptr };
-        if head.state.compare_exchange(
-            State::Initialized.into(), State::Ready.into(), Ordering::Acquire, Ordering::Relaxed
-        ).is_err() { todo!("Failed to change task state") }
+        // Initialized -> Ready 只做一次；已活任务的重入队是允许的
+        // （唤醒路径也会推；重复条目在 run_task 里按状态塌缩）。
+        let _ = head.state.compare_exchange(
+            State::Initialized.into(),
+            State::Ready.into(),
+            Ordering::Acquire,
+            Ordering::Relaxed,
+        );
         if let Err(h) = self.worker.push(ptr) {
             // TODO: User Custom Error Handler
             panic!("Failed to push task to local queue: {:?}", h);
@@ -243,16 +248,37 @@ impl Executor {
     fn run_task(&self, ptr: *mut TaskHeader) {
         let head = unsafe { &*ptr };
 
-        if head.state.compare_exchange(
-            State::Ready.into(), State::Running.into(), Ordering::Acquire, Ordering::Relaxed
-        ).is_err() { todo!("Failed to change task state") }
+        // 只有 Ready -> Running 的条目才 poll：队列里重复的（唤醒又推了一份）
+        // 在这里自动塌缩掉，不 panic。
+        if head
+            .state
+            .compare_exchange(
+                State::Ready.into(),
+                State::Running.into(),
+                Ordering::Acquire,
+                Ordering::Relaxed,
+            )
+            .is_err()
+        {
+            return;
+        }
 
         // SAFETY: TaskHeader size equaled.
         let is_ready = unsafe { (head.poll)(ptr) };
         if is_ready {
-            if head.state.compare_exchange(
-                State::Running.into(), State::Unreachable.into(), Ordering::Acquire, Ordering::Relaxed
-            ).is_err() { todo!("Failed to change task state") }
+            // poll 期间并发唤醒会把状态置回 Ready：此时不清 Unreachable，
+            // 让它再跑一轮（waker 那边已经重入队）。
+            let _ = head.state.compare_exchange(
+                State::Running.into(),
+                State::Unreachable.into(),
+                Ordering::Acquire,
+                Ordering::Relaxed,
+            );
+        } else {
+            // Pending 的任务自己续上（round-robin；和 nano 语义一致），
+            // 中断唤醒走 waker 路径加速。
+            head.state.store(State::Ready.into(), Ordering::Release);
+            let _ = self.worker.push(ptr);
         }
     }
 }
