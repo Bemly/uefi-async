@@ -22,15 +22,28 @@ impl UefiTalc {
         let mut talc = self.0.lock();
         let _ = unsafe { talc.claim(span) };
     }
+
+    /// 按页数初始化（`init` 的参数化版本；页固定 4KiB）。
+    ///
+    /// # Safety
+    /// 与 [`init`](Self::init) 同：在首次堆分配前调用一次。
+    pub unsafe fn init_with_pages(&self, pages: usize) {
+        let pool_ptr = allocate_pages(AllocateType::AnyPages, MemoryType::LOADER_DATA, pages)
+            .expect("Failed to allocate heap pages");
+        unsafe {
+            self.init(pool_ptr.as_ptr(), pages * 4096);
+        }
+    }
 }
 
-pub fn alloc_init_wrapper() {
-    let pages = 131072; // 512MB
-    let pool_ptr = allocate_pages(AllocateType::AnyPages, MemoryType::LOADER_DATA, pages)
-        .expect("Failed to allocate heap pages");
+/// 默认堆页数（64MiB）：任务节点 + 通道都是小对象，这个量级绰绰有余；
+/// 1GiB 的 QEMU 机上不再一次性钉死半壁内存。有更大需求的直接调
+/// [`UefiTalc::init_with_pages`]（QEMU 里验证过，按需加到此数）。
+pub const DEFAULT_HEAP_PAGES: usize = 16384; // 64MiB
 
+/// 向后兼容的默认初始化（64MiB，见 [`DEFAULT_HEAP_PAGES`]）。
+pub fn alloc_init_wrapper() {
     unsafe {
-        // 初始化全局分配器
-        ALLOCATOR.init(pool_ptr.as_ptr(), pages * 4096);
+        ALLOCATOR.init_with_pages(DEFAULT_HEAP_PAGES);
     }
 }
