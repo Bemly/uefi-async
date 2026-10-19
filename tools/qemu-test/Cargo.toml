@@ -1,0 +1,13 @@
+[package]
+name = "qemu-test"
+version = "0.1.0"
+edition = "2021"
+description = "QEMU 黑盒冒烟：起真 UEFI 跑 testy 自测，断言串口 SELFTEST 标记"
+
+# 轮子结论（隔壁 uefi-player 同款做法）：
+# - 不引 clap/regex 等：参数就 --case/--keep 几个，手写解析足够；
+#   断言是字面包含匹配；FAT 镜像走系统工具当子进程调。
+# - OVMF 用自带 nightly RELEASE（assets/ovmf-release-x86_64-code.fd，
+#   osdev0/edk2-ovmf-nightly 20261019T035340Z，build -b RELEASE；
+#   与 uefi-player 同一文件，来源见该仓 tools/qemu-matrix/README）。
+[dependencies]

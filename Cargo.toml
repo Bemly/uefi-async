@@ -4,6 +4,11 @@ members = [
     "macros",
     "testy",
 ]
+# host 工具不进 members（根 .cargo/config 把默认 target 钉死了 UEFI，
+# 进来就会被当固件编；调用时一律显式 --target host，见各 README）。
+exclude = [
+    "tools/qemu-test",
+]
 resolver = "3"
 
 [workspace.package]

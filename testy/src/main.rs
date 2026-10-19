@@ -10,9 +10,10 @@ use uefi_async::global_allocator::alloc_init_wrapper;
 // mod task_v1;
 mod st3_benchmark;
 mod st3_patch_benchmark;
-mod task_dynamic;
-mod task_nano;
 mod task_v2;
+mod task_nano;
+mod task_dynamic;
+mod selftest;
 // mod _template;
 
 #[entry]
@@ -29,9 +30,15 @@ fn main() -> Status {
     // unsafe { st3_patch_benchmark::benchmark(); }   // 84 acycles :(
 
     // test
-    // task_v1::task_fn();
-    task_v2::task_fn();
+    // task_v2::task_fn();
     // task_dynamic::task_fn();
+
+    // QEMU 自测先行：核心链路打串口标记（runner 靠它判分），挂了就地停机。
+    if !selftest::run() {
+        loop {
+            stall(Duration::from_secs(60));
+        }
+    }
 
     stall(Duration::from_hours(1));
     Status::SUCCESS

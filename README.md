@@ -285,6 +285,31 @@ async fn consumer(rx: ChannelReceiver<PhysicsResult>) {
 ```
 
 --------------------------------
+Testing
+--------------------------------
+Three layers, all green before pushing:
+
+* **Host unit tests** (pure logic, no UEFI needed): `WakePolicy` matrix,
+  `TaskNode::ticks` matrix.
+  ```bash
+  T="$(rustc -vV | sed -n 's/^host: //p')"
+  cargo test -p uefi-async --target "$T" --features nano-alloc,alloc,static
+  ```
+  (`global-allocator` is excluded on purpose: it installs an empty talc as
+  the process-global allocator, which aborts the host test harness itself.
+  It is covered by QEMU instead.)
+* **Doctests**: every code example in rustdoc compiles (illustrative
+  pseudo-code is marked `text`). Same command as above covers them.
+* **QEMU black box** (`tools/qemu-test`, host-only, excluded from the
+  workspace like any host tool): builds `testy`, boots real UEFI
+  (vendored RELEASE OVMF), runs `testy::selftest` (allocator, nano/dynamic
+  executors incl. cross-executor steal, channels, signals, timers) and
+  asserts `SELFTEST PASS` on the serial log.
+  ```bash
+  cargo run --manifest-path tools/qemu-test/Cargo.toml --target "$T" [-- --keep]
+  ```
+
+--------------------------------
 Why use `uefi-async`?
 --------------------------------
 In UEFI development, managing multiple periodic tasks (like polling keyboard input while updating a UI 
