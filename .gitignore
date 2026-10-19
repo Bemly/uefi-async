@@ -6,3 +6,7 @@
 NvVars
 Cargo.lock
 .DS_Store
+# host 工具构建产物（tools/ 不进 workspace，独立 target 目录）
+tools/**/target/
+# QEMU 运行产物（串口日志/镜像，按 case 即用即建，不入库）
+tools/qemu-test/runs/
