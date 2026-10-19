@@ -6,7 +6,9 @@ It provides a simple task scheduler based on a intrusive linked-list and procedu
 --------------------------------
 Work in Progress
 --------------------------------
-currently only `nano_alloc` feature is supported.
+All four lines build on all UEFI targets (`nano-alloc`, `alloc`,
+`static`, `global-allocator`); `dynamic` covers spawn / cancel / retune /
+cross-core stealing, `static` runs the Embassy-style pool to completion.
 
 --------------------------------
 Features

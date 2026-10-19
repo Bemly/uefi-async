@@ -10,8 +10,9 @@ use uefi_async::global_allocator::alloc_init_wrapper;
 // mod task_v1;
 mod st3_benchmark;
 mod st3_patch_benchmark;
-mod task_v2;
+mod task_dynamic;
 mod task_nano;
+mod task_v2;
 // mod _template;
 
 #[entry]
@@ -30,6 +31,7 @@ fn main() -> Status {
     // test
     // task_v1::task_fn();
     task_v2::task_fn();
+    // task_dynamic::task_fn();
 
     stall(Duration::from_hours(1));
     Status::SUCCESS
