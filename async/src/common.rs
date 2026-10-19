@@ -5,6 +5,12 @@ pub mod tick;
 pub mod step;
 pub mod signal;
 
+/// Executor-agnostic control combinators (join/select) usable from every line.
+pub mod control;
+
+/// Executor-agnostic timing (timeouts, human-readable timers), no heap.
+pub mod time;
+
 /// Cooperative async mutex (park instead of spin) for cross-core exclusion.
 pub mod mutex;
 

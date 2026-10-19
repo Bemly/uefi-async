@@ -118,7 +118,7 @@ pub fn task(input: TokenStream) -> TokenStream {
 pub mod join {
     use super::*;
 
-    fn get_path() -> TokenStream { quote! { ::uefi_async::nano_alloc::control::single::join } }
+    fn get_path() -> TokenStream { quote! { ::uefi_async::common::control::single::join } }
 
 
     struct JoinInput (Punctuated<Expr, Token![,]>);
@@ -272,7 +272,7 @@ pub mod join {
 pub mod select {
     use super::*;
 
-    fn get_path() -> TokenStream { quote! { ::uefi_async::nano_alloc::control::single::select } }
+    fn get_path() -> TokenStream { quote! { ::uefi_async::common::control::single::select } }
 
     // Analyzing a single branch: expr => { block }
     struct SelectBranch { expr: Expr, _arrow: Token![=>], block: Block }

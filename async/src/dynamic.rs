@@ -13,7 +13,7 @@
 //! Scheduling is frequency-based like everywhere else in this crate: every
 //! task carries a Hz rate converted with the global [`FREQ`](crate::FREQ)
 //! calibration, and cooperative primitives (`Yield`, `Skip`, `Pacer`,
-//! [`WaitTimer`](crate::nano_alloc::time::WaitTimer)) work unchanged because
+//! [`WaitTimer`](crate::common::time::WaitTimer)) work unchanged because
 //! they are plain futures.
 
 pub mod executor;

@@ -38,7 +38,9 @@ All four build on all UEFI targets (`x86_64` / `aarch64` / `i686`).
 `nano-alloc` and `dynamic` share the same control vocabulary (`join!`,
 `select!`, `Timeout`, `WaitTimer`, `Pacer`, channels, `AsyncMutex`),
 so switching lines mostly means switching how tasks are *held*, not how
-they are *written*.
+they are *written*. Executor-agnostic pieces live in `common::control` /
+`common::time` (usable from every line, including `static`);
+`nano_alloc::{control, time}` re-export them unchanged.
 
 ```rust
 use uefi_async::dynamic::Executor;

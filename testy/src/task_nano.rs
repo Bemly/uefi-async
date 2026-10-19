@@ -38,9 +38,9 @@ async fn calc_2() {
     Skip(2).await;
 
     match Box::pin(calc_2()).timeout(Duration::from_secs(2).as_secs()).await { _ => () }
-    match Timeout::new_pin(Box::pin(calc_2()), 500).await { _ => () }
+    match Timeout::new(Box::pin(calc_2()), 500).await { _ => () }
     match Timeout::new(calc_1(), 300).await { _ => () }
-    match calc_2().timeout(500).await { Ok(_) => {}, Err(_) => {} }
+    match Box::pin(calc_2()).timeout(500).await { Ok(_) => {}, Err(_) => {} }
 
     join!(calc_1(), calc_1(), calc_1(), calc_1(),calc_1(),calc_1(),calc_1(),calc_1(),calc_1(),calc_1()
         ,calc_1(),calc_1(),calc_1(),calc_1(),calc_1(),calc_1(),calc_1(),calc_1(),calc_1(),calc_1()
